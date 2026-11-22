@@ -19,7 +19,9 @@ export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 
 #レンダラはpixman（ソフトウェア描画）にする。GLレンダラだと
 #X11バックエンドの初期化に失敗することがあるため。
-weston --backend=x11-backend.so --socket=wayland-rtv --idle-time=0 --use-pixman &
+#出力サイズは明示する。既定の1024x768だとrtv-displayの窓（1280x720）
+#より小さく、画面が見切れてしまうため。
+weston --backend=x11-backend.so --socket=wayland-rtv --idle-time=0 --use-pixman --width=1440 --height=900 &
 WESTON_PID=$!
 trap 'kill $WESTON_PID 2>/dev/null' EXIT
 
