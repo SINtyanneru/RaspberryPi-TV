@@ -4,11 +4,15 @@
 //標準出力は将来のJava本体とのバイナリプロトコル用に空けるため、
 //ログはすべて標準エラーへ出すこと。
 #define _POSIX_C_SOURCE 200809L
+#include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -44,6 +48,7 @@
 #define OBJECT_TYPE_LINE 0x03
 #define OBJECT_TYPE_CIRCLE 0x04
 #define OBJECT_TYPE_TEXT 0x05
+#define OBJECT_TYPE_FRAMEBUFFER 0x06
 #define MAX_ARGS 255
 #define IN_BUFFER_SIZE 65536
 
@@ -59,6 +64,8 @@ struct proto_arg {
 // 直線: (x,y)=始点、(x2,y2)=終点
 // 円: x,y=中心、radius=半径
 // テキスト: x,y=左上、size=ピクセルサイズ、text=文字列(UTF-8)
+// フレームバッファー: x,y=表示位置、width,height=表示サイズ、
+//   src_width,src_height=映像のサイズ(BGRAをソケットから受ける)
 struct display_object {
 	uint64_t id;
 	uint8_t type;
@@ -73,6 +80,26 @@ struct display_object {
 	uint64_t radius;
 	uint64_t size;
 	char *text;
+	uint64_t src_width;
+	uint64_t src_height;
+	//フレームバッファー用: 映像受け入れソケットとダブルバッファ
+	struct server *server;
+	int listen_fd;
+	int client_fd;
+	struct wl_event_source *listen_source;
+	struct wl_event_source *client_source;
+	uint8_t *frame_front;
+	uint8_t *frame_back;
+	size_t frame_size;
+	size_t frame_received;
+	int has_frame;
+	//フレームバッファー用: ハードウェアプレーン（使える場合だけ）
+	struct backend_plane *plane;
+	uint8_t *plane_pixels[2];
+	uint32_t plane_stride;
+	int plane_next;
+	uint64_t plane_src_width;
+	uint64_t plane_src_height;
 	uint8_t r;
 	uint8_t g;
 	uint8_t b;
@@ -486,6 +513,46 @@ static void draw_text(struct server *server, struct display_object *object) {
 }
 #endif
 
+static void draw_framebuffer(struct server *server, struct display_object *object) {
+	struct backend *backend = server->backend;
+	int width = backend->width;
+	int height = backend->height;
+	if (object->width == 0 || object->height == 0 || object->src_width == 0 || object->src_height == 0) {
+		return;
+	}
+	if (object->x >= (uint64_t)width || object->y >= (uint64_t)height) {
+		return;
+	}
+	uint64_t x1 = object->x + object->width;
+	if (x1 > (uint64_t)width || x1 < object->x) {
+		x1 = (uint64_t)width;
+	}
+	uint64_t y1 = object->y + object->height;
+	if (y1 > (uint64_t)height || y1 < object->y) {
+		y1 = (uint64_t)height;
+	}
+	for (uint64_t y = object->y; y < y1; y++) {
+		//表示サイズへリサイズ（最近傍）しながら描く
+		uint64_t sy = (y - object->y) * object->src_height / object->height;
+		for (uint64_t x = object->x; x < x1; x++) {
+			uint32_t *dst = &backend->pixels[y * (uint64_t)width + x];
+			if (object->plane != NULL) {
+				//映像はハードウェアプレーン側にある。ここは透明にして透かす。
+				*dst = 0;
+				continue;
+			}
+			if (!object->has_frame || object->frame_front == NULL) {
+				//まだ映像が来ていない間は黒で埋める
+				*dst = 0xFF000000;
+				continue;
+			}
+			uint64_t sx = (x - object->x) * object->src_width / object->width;
+			//BGRAのバイト並びはXRGB8888のワードと一致する
+			*dst = ((const uint32_t *)object->frame_front)[sy * object->src_width + sx] | 0xFF000000;
+		}
+	}
+}
+
 static void draw_object(struct server *server, struct display_object *object) {
 	if (object->a == 0) {
 		return;
@@ -505,6 +572,9 @@ static void draw_object(struct server *server, struct display_object *object) {
 		break;
 	case OBJECT_TYPE_TEXT:
 		draw_text(server, object);
+		break;
+	case OBJECT_TYPE_FRAMEBUFFER:
+		draw_framebuffer(server, object);
 		break;
 	default:
 		break;
@@ -842,6 +912,215 @@ static struct display_object *find_object(struct server *server, uint64_t id) {
 	return NULL;
 }
 
+//--- フレームバッファーの映像受け入れ -------------------------------------
+// /tmp/rpitv-buffer-{ID}.sock というUNIXソケットでBGRAの映像を受ける。
+
+static void framebuffer_socket_path(struct display_object *object, char *buffer, size_t size) {
+	snprintf(buffer, size, "/tmp/rpitv-buffer-%llu.sock", (unsigned long long)object->id);
+}
+
+//ソケットとフレームバッファを片付ける（どの種類のオブジェクトに呼んでも安全）。
+static void framebuffer_close(struct display_object *object) {
+	if (object->plane != NULL) {
+		if (object->server != NULL && object->server->backend != NULL) {
+			backend_destroy_plane(object->server->backend, object->plane);
+		}
+		object->plane = NULL;
+	}
+	if (object->client_source != NULL) {
+		wl_event_source_remove(object->client_source);
+		object->client_source = NULL;
+	}
+	if (object->client_fd >= 0) {
+		close(object->client_fd);
+		object->client_fd = -1;
+	}
+	if (object->listen_source != NULL) {
+		wl_event_source_remove(object->listen_source);
+		object->listen_source = NULL;
+	}
+	if (object->listen_fd >= 0) {
+		close(object->listen_fd);
+		object->listen_fd = -1;
+		char path[64];
+		framebuffer_socket_path(object, path, sizeof(path));
+		unlink(path);
+	}
+	free(object->frame_front);
+	free(object->frame_back);
+	object->frame_front = NULL;
+	object->frame_back = NULL;
+	object->frame_size = 0;
+	object->frame_received = 0;
+	object->has_frame = 0;
+}
+
+static void framebuffer_disconnect_client(struct display_object *object) {
+	if (object->client_source != NULL) {
+		wl_event_source_remove(object->client_source);
+		object->client_source = NULL;
+	}
+	if (object->client_fd >= 0) {
+		close(object->client_fd);
+		object->client_fd = -1;
+	}
+	object->frame_received = 0;
+}
+
+static int framebuffer_client_callback(int fd, uint32_t mask, void *data) {
+	struct display_object *object = data;
+	if (object->frame_back == NULL || object->frame_size == 0) {
+		return 0;
+	}
+	for (;;) {
+		ssize_t n = read(fd, object->frame_back + object->frame_received, object->frame_size - object->frame_received);
+		if (n > 0) {
+			object->frame_received += (size_t)n;
+			if (object->frame_received == object->frame_size) {
+				//1フレーム揃ったので表と入れ替えて表示する
+				uint8_t *tmp = object->frame_front;
+				object->frame_front = object->frame_back;
+				object->frame_back = tmp;
+				object->frame_received = 0;
+				object->has_frame = 1;
+				if (object->plane != NULL && object->server->backend != NULL) {
+					//プレーンの裏バッファへ行ごとにコピーしてフリップする。
+					//合成とリサイズは表示コントローラがやるので、全体の再描画はしない。
+					uint8_t *dst = object->plane_pixels[object->plane_next];
+					for (uint64_t row = 0; row < object->src_height; row++) {
+						memcpy(dst + row * object->plane_stride,
+							object->frame_front + row * object->src_width * 4,
+							(size_t)object->src_width * 4);
+					}
+					if (backend_plane_flip(object->server->backend, object->plane, dst) == 0) {
+						object->plane_next ^= 1;
+					} else {
+						fprintf(stderr, "rtv-display: framebuffer %llu: plane flip failed; falling back to software rendering\n", (unsigned long long)object->id);
+						backend_destroy_plane(object->server->backend, object->plane);
+						object->plane = NULL;
+						render(object->server);
+					}
+				} else {
+					render(object->server);
+				}
+			}
+			continue;
+		}
+		if (n == 0) {
+			//切断。最後のフレームは表示したままにする。
+			fprintf(stderr, "rtv-display: framebuffer %llu: producer disconnected\n", (unsigned long long)object->id);
+			framebuffer_disconnect_client(object);
+			return 0;
+		}
+		if (errno == EINTR) {
+			continue;
+		}
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			return 0;
+		}
+		framebuffer_disconnect_client(object);
+		return 0;
+	}
+}
+
+static int framebuffer_listen_callback(int fd, uint32_t mask, void *data) {
+	struct display_object *object = data;
+	int client = accept(fd, NULL, NULL);
+	if (client < 0) {
+		return 0;
+	}
+	int flags = fcntl(client, F_GETFL, 0);
+	fcntl(client, F_SETFL, flags | O_NONBLOCK);
+	fcntl(client, F_SETFD, FD_CLOEXEC);
+	//接続は1つだけ。前の接続があれば切る。
+	if (object->client_fd >= 0) {
+		framebuffer_disconnect_client(object);
+	}
+	object->client_fd = client;
+	struct wl_event_loop *loop = wl_display_get_event_loop(object->server->display);
+	object->client_source = wl_event_loop_add_fd(loop, client, WL_EVENT_READABLE, framebuffer_client_callback, object);
+	fprintf(stderr, "rtv-display: framebuffer %llu: producer connected\n", (unsigned long long)object->id);
+	return 0;
+}
+
+//ソケットを用意し、映像サイズに合わせてフレームバッファを確保する。
+static int framebuffer_setup(struct server *server, struct display_object *object) {
+	if (object->listen_fd < 0) {
+		char path[64];
+		framebuffer_socket_path(object, path, sizeof(path));
+		unlink(path);
+		int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+		if (fd < 0) {
+			return 0;
+		}
+		int flags = fcntl(fd, F_GETFL, 0);
+		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+		struct sockaddr_un addr;
+		memset(&addr, 0, sizeof(addr));
+		addr.sun_family = AF_UNIX;
+		snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+		if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(fd, 4) != 0) {
+			fprintf(stderr, "rtv-display: framebuffer: cannot bind %s\n", path);
+			close(fd);
+			return 0;
+		}
+		object->listen_fd = fd;
+		struct wl_event_loop *loop = wl_display_get_event_loop(server->display);
+		object->listen_source = wl_event_loop_add_fd(loop, fd, WL_EVENT_READABLE, framebuffer_listen_callback, object);
+		fprintf(stderr, "rtv-display: framebuffer socket ready: %s (source %llux%llu, display %llux%llu)\n",
+			path,
+			(unsigned long long)object->src_width, (unsigned long long)object->src_height,
+			(unsigned long long)object->width, (unsigned long long)object->height);
+	}
+	size_t frame_size = (size_t)object->src_width * (size_t)object->src_height * 4;
+	if (object->frame_size != frame_size) {
+		free(object->frame_front);
+		free(object->frame_back);
+		object->frame_front = malloc(frame_size);
+		object->frame_back = malloc(frame_size);
+		if (object->frame_front == NULL || object->frame_back == NULL) {
+			free(object->frame_front);
+			free(object->frame_back);
+			object->frame_front = NULL;
+			object->frame_back = NULL;
+			object->frame_size = 0;
+			object->frame_received = 0;
+			object->has_frame = 0;
+			return 0;
+		}
+		object->frame_size = frame_size;
+		object->frame_received = 0;
+		object->has_frame = 0;
+	}
+	//バックエンドがあるなら、ハードウェアプレーンの割り当ても試みる。
+	//失敗したらソフトウェア描画のまま（planeはNULL）。
+	if (server->backend != NULL) {
+		if (object->plane != NULL &&
+			(object->plane_src_width != object->src_width || object->plane_src_height != object->src_height)) {
+			//映像サイズが変わったら、バッファを作り直すために一度手放す
+			backend_destroy_plane(server->backend, object->plane);
+			object->plane = NULL;
+		}
+		if (object->plane == NULL) {
+			object->plane = backend_create_plane(server->backend,
+				(uint32_t)object->src_width, (uint32_t)object->src_height,
+				object->plane_pixels, &object->plane_stride);
+			if (object->plane != NULL) {
+				object->plane_src_width = object->src_width;
+				object->plane_src_height = object->src_height;
+				object->plane_next = 0;
+			}
+		}
+		if (object->plane != NULL &&
+			backend_plane_set_geometry(server->backend, object->plane,
+				(int)object->x, (int)object->y, (int)object->width, (int)object->height) != 0) {
+			backend_destroy_plane(server->backend, object->plane);
+			object->plane = NULL;
+		}
+	}
+	return 1;
+}
+
 static void apply_color(struct display_object *object, const uint8_t *color) {
 	object->r = color[0];
 	object->g = color[1];
@@ -926,6 +1205,29 @@ static int apply_object_args(struct server *server, struct display_object *objec
 		apply_color(object, color);
 		set_object_text(object, args[first + 2].data, args[first + 2].size);
 		return 1;
+	case OBJECT_TYPE_FRAMEBUFFER: {
+		//引数: 表示位置とサイズ(32バイト)、映像のサイズ(16バイト)
+		if (argc - first != 2 || args[first].size != 32 || args[first + 1].size != 16) {
+			return 0;
+		}
+		uint64_t src_width = read_u64be(args[first + 1].data);
+		uint64_t src_height = read_u64be(args[first + 1].data + 8);
+		if (src_width == 0 || src_height == 0 || src_width > 7680 || src_height > 4320 ||
+			src_width * src_height > 3840 * 2160) {
+			return 0;
+		}
+		object->x = read_u64be(geometry);
+		object->y = read_u64be(geometry + 8);
+		object->width = read_u64be(geometry + 16);
+		object->height = read_u64be(geometry + 24);
+		object->src_width = src_width;
+		object->src_height = src_height;
+		object->a = 0xFF;
+		if (!framebuffer_setup(server, object)) {
+			return 0;
+		}
+		return 1;
+	}
 	default:
 		return 0;
 	}
@@ -942,6 +1244,13 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 		if (server->backend == NULL) {
 			return STATUS_ERROR;
 		}
+		//起動前に作られたフレームバッファーにもプレーンを割り当てる
+		struct display_object *object;
+		wl_list_for_each(object, &server->objects, link) {
+			if (object->type == OBJECT_TYPE_FRAMEBUFFER) {
+				framebuffer_setup(server, object);
+			}
+		}
 		render(server);
 		return STATUS_OK;
 	case COMMAND_CREATE_OBJECT: {
@@ -951,7 +1260,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			return STATUS_ERROR;
 		}
 		uint8_t type = args[1].data[0];
-		if (type != OBJECT_TYPE_RECT && type != OBJECT_TYPE_TRIANGLE && type != OBJECT_TYPE_LINE && type != OBJECT_TYPE_CIRCLE && type != OBJECT_TYPE_TEXT) {
+		if (type != OBJECT_TYPE_RECT && type != OBJECT_TYPE_TRIANGLE && type != OBJECT_TYPE_LINE && type != OBJECT_TYPE_CIRCLE && type != OBJECT_TYPE_TEXT && type != OBJECT_TYPE_FRAMEBUFFER) {
 			fprintf(stderr, "rtv-display: create object: unknown type 0x%02X\n", type);
 			return STATUS_ERROR;
 		}
@@ -961,6 +1270,9 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 		if (object == NULL) {
 			object = calloc(1, sizeof(*object));
 			object->id = id;
+			object->server = server;
+			object->listen_fd = -1;
+			object->client_fd = -1;
 			is_new = 1;
 		}
 		uint8_t old_type = object->type;
@@ -969,12 +1281,16 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			fprintf(stderr, "rtv-display: create object: bad args for type 0x%02X\n", type);
 			object->type = old_type;
 			if (is_new) {
+				framebuffer_close(object);
 				free(object);
 			}
 			return STATUS_ERROR;
 		}
 		if (type != OBJECT_TYPE_TEXT) {
 			set_object_text(object, NULL, 0);
+		}
+		if (old_type == OBJECT_TYPE_FRAMEBUFFER && type != OBJECT_TYPE_FRAMEBUFFER) {
+			framebuffer_close(object);
 		}
 		if (is_new) {
 			//作った順に手前へ描くので末尾へ足す
@@ -1013,6 +1329,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			return STATUS_ERROR;
 		}
 		wl_list_remove(&object->link);
+		framebuffer_close(object);
 		free(object->text);
 		free(object);
 		render(server);
@@ -1028,6 +1345,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 		struct display_object *tmp;
 		wl_list_for_each_safe(object, tmp, &server->objects, link) {
 			wl_list_remove(&object->link);
+			framebuffer_close(object);
 			free(object->text);
 			free(object);
 		}

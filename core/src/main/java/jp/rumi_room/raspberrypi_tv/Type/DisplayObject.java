@@ -14,7 +14,8 @@ public abstract class DisplayObject {
 		TRIANGLE((byte) 0x02),
 		LINE((byte) 0x03),
 		CIRCLE((byte) 0x04),
-		TEXT((byte) 0x05);
+		TEXT((byte) 0x05),
+		FRAMEBUFFER((byte) 0x06);
 
 		private final byte code;
 

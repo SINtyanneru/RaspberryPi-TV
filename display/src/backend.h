@@ -5,9 +5,16 @@
 
 struct wl_display;
 
+enum backend_kind {
+	BACKEND_HEADLESS,
+	BACKEND_DRM,
+	BACKEND_WINDOW,
+};
+
 //描画バックエンドの抽象。pixelsはXRGB8888のフレームバッファで、
 //コンポジタがここへ描いてからpresent()を呼ぶ。
 struct backend {
+	enum backend_kind kind;
 	int width;
 	int height;
 	uint32_t *pixels;
@@ -24,5 +31,21 @@ struct backend *backend_drm_create(const char *device, int request_width, int re
 
 //親コンポジタ上のウィンドウ表示（デバッグ用）
 struct backend *backend_window_create(struct wl_display *server_display, int width, int height);
+
+//--- ハードウェアプレーン ---------------------------------------------------
+//映像などを表示コントローラ側で合成・リサイズするための仕組み。
+//対応するバックエンド（DRM）以外ではcreateがNULLを返し、
+//呼び出し側はソフトウェア描画へフォールバックする。
+//バッファはXBGR8888（メモリ上はB,G,R,Xの並び）でダブルバッファ。
+struct backend_plane;
+
+//幅・高さは映像（ソース）のサイズ。pixels_outに2面の先頭アドレス、
+//stride_outに1行のバイト数が入る。
+struct backend_plane *backend_create_plane(struct backend *backend, uint32_t width, uint32_t height, uint8_t *pixels_out[2], uint32_t *stride_out);
+//表示位置とサイズを設定する。
+int backend_plane_set_geometry(struct backend *backend, struct backend_plane *plane, int x, int y, int width, int height);
+//pixels_outのどちらかを表示する（フリップ）。
+int backend_plane_flip(struct backend *backend, struct backend_plane *plane, const uint8_t *pixels);
+void backend_destroy_plane(struct backend *backend, struct backend_plane *plane);
 
 #endif

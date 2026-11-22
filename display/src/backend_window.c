@@ -283,6 +283,7 @@ struct backend *backend_window_create(struct wl_display *server_display, int wid
 	backend->data = window;
 	backend->present = window_present;
 	backend->destroy = window_destroy;
+	backend->kind = BACKEND_WINDOW;
 	fprintf(stderr, "rtv-display: debug window %dx%d on parent compositor\n", window->window_width, window->window_height);
 	return backend;
 }

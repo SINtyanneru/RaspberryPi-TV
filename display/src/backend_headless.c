@@ -44,5 +44,6 @@ struct backend *backend_headless_create(int width, int height, const char *dump_
 	backend->data = data;
 	backend->present = headless_present;
 	backend->destroy = headless_destroy;
+	backend->kind = BACKEND_HEADLESS;
 	return backend;
 }
