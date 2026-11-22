@@ -8,13 +8,20 @@ if [ "$1" = "clean" ]; then
 	exit 0
 fi
 
-if ! pkg-config --exists libcec 2>/dev/null; then
+if pkg-config --exists libcec 2>/dev/null; then
+	CEC_CFLAGS=$(pkg-config --cflags libcec)
+	CEC_LIBS=$(pkg-config --libs libcec)
+elif printf '#include <libcec/cec.h>\n' | clang++ -E -x c++ - >/dev/null 2>&1; then
+	#pkg-configのRequires（p8-platform、libudev）が揃っていないと、
+	#libcec.pcがあっても--existsが失敗する（Debianのlibcec-devは
+	#それらに依存していない）。ヘッダが標準位置にあるなら直接リンクで足りる。
+	CEC_CFLAGS=""
+	CEC_LIBS="-lcec"
+else
 	echo "hdmi-cec: libcec not found; skipping rtv-cec (install libcec-dev to build it)"
 	exit 0
 fi
 
-CEC_CFLAGS=$(pkg-config --cflags libcec)
-CEC_LIBS=$(pkg-config --libs libcec)
 OBJC_INCLUDE=$(gcc -print-file-name=include)
 
 #Objective-C++としてコンパイルする。ObjCランタイムはGCCランタイムを使う。
