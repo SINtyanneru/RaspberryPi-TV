@@ -4,3 +4,5 @@ rtv-test-client
 frame.ppm
 frame.png
 *.log
+*-response.bin
+response.bin

@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <wayland-server.h>
 
@@ -19,11 +20,55 @@
 #define WINDOW_WIDTH_FRACTION 2
 #define WINDOW_HEIGHT_FRACTION 2
 
+//coreとのバイナリプロトコル（標準入出力）
+//要求: [u8 コマンド][u8 引数の数]([u8 サイズ][データ])の繰り返し
+//応答: [u8 ステータス]
+#define STATUS_OK 0x20
+#define STATUS_ERROR 0xFF
+#define COMMAND_INIT 0x00
+#define COMMAND_CREATE_OBJECT 0x01
+#define COMMAND_UPDATE_OBJECT 0x02
+#define COMMAND_DELETE_OBJECT 0x03
+#define COMMAND_DELETE_ALL_OBJECTS 0x04
+#define OBJECT_TYPE_RECT 0x01
+#define MAX_ARGS 255
+#define IN_BUFFER_SIZE 65536
+
+struct proto_arg {
+	const uint8_t *data;
+	uint8_t size;
+};
+
+//coreから作られたオブジェクト。IDとの対応表はこのプロセスが持つ。
+struct display_object {
+	uint64_t id;
+	uint8_t type;
+	uint64_t x;
+	uint64_t y;
+	uint64_t width;
+	uint64_t height;
+	uint8_t r;
+	uint8_t g;
+	uint8_t b;
+	uint8_t a;
+	struct wl_list link;
+};
+
 struct server {
 	struct wl_display *display;
 	struct backend *backend;
 	struct wl_list surfaces;
+	struct wl_list objects;
 	uint32_t configure_serial;
+	//バックエンド設定（生成は初期化コマンドまで遅延する）
+	const char *backend_name;
+	const char *dump_path;
+	const char *drm_device;
+	int width;
+	int height;
+	//プロトコル受信バッファ
+	uint8_t in_buffer[IN_BUFFER_SIZE];
+	size_t in_length;
 };
 
 struct xdg_surface_data;
@@ -54,6 +99,10 @@ static uint32_t now_msec(void) {
 //--- 合成 -----------------------------------------------------------------
 
 static void render(struct server *server) {
+	if (server->backend == NULL) {
+		//初期化コマンド前は画面が無い
+		return;
+	}
 	struct backend *backend = server->backend;
 	int width = backend->width;
 	int height = backend->height;
@@ -106,6 +155,38 @@ static void render(struct server *server) {
 			}
 		}
 		wl_shm_buffer_end_access(shm);
+	}
+	//オブジェクト（UI）はサーフェスの上に描く
+	struct display_object *object;
+	wl_list_for_each(object, &server->objects, link) {
+		if (object->type != OBJECT_TYPE_RECT || object->a == 0) {
+			continue;
+		}
+		if (object->x >= (uint64_t)width || object->y >= (uint64_t)height) {
+			continue;
+		}
+		uint64_t x1 = object->x + object->width;
+		if (x1 > (uint64_t)width || x1 < object->x) {
+			x1 = (uint64_t)width;
+		}
+		uint64_t y1 = object->y + object->height;
+		if (y1 > (uint64_t)height || y1 < object->y) {
+			y1 = (uint64_t)height;
+		}
+		for (uint64_t y = object->y; y < y1; y++) {
+			for (uint64_t x = object->x; x < x1; x++) {
+				uint32_t *dst = &backend->pixels[y * (uint64_t)width + x];
+				if (object->a == 0xFF) {
+					*dst = 0xFF000000 | ((uint32_t)object->r << 16) | ((uint32_t)object->g << 8) | object->b;
+				} else {
+					uint32_t a = object->a;
+					uint32_t r = (object->r * a + ((*dst >> 16) & 0xFF) * (0xFF - a)) / 0xFF;
+					uint32_t g = (object->g * a + ((*dst >> 8) & 0xFF) * (0xFF - a)) / 0xFF;
+					uint32_t b = (object->b * a + (*dst & 0xFF) * (0xFF - a)) / 0xFF;
+					*dst = 0xFF000000 | (r << 16) | (g << 8) | b;
+				}
+			}
+		}
 	}
 	backend->present(backend);
 }
@@ -244,7 +325,7 @@ static void output_bind(struct wl_client *client, void *data, uint32_t version, 
 	struct wl_resource *resource = wl_resource_create(client, &wl_output_interface, version, id);
 	wl_resource_set_implementation(resource, NULL, NULL, NULL);
 	wl_output_send_geometry(resource, 0, 0, 527, 296, WL_OUTPUT_SUBPIXEL_UNKNOWN, "Rumi", "RaspberryPi TV", WL_OUTPUT_TRANSFORM_NORMAL);
-	wl_output_send_mode(resource, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, server->backend->width, server->backend->height, 60000);
+	wl_output_send_mode(resource, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, server->width, server->height, 60000);
 	if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) {
 		wl_output_send_scale(resource, 1);
 	}
@@ -282,8 +363,8 @@ static void xdg_surface_handle_get_toplevel(struct wl_client *client, struct wl_
 	xdg->toplevel = toplevel;
 	wl_resource_set_implementation(toplevel, &xdg_toplevel_impl, xdg, NULL);
 	//初期configure: ウィンドウは画面の中央に分数サイズで出す
-	int win_w = server->backend->width * WINDOW_WIDTH_FRACTION / 3;
-	int win_h = server->backend->height * WINDOW_HEIGHT_FRACTION / 3;
+	int win_w = server->width * WINDOW_WIDTH_FRACTION / 3;
+	int win_h = server->height * WINDOW_HEIGHT_FRACTION / 3;
 	struct wl_array states;
 	wl_array_init(&states);
 	enum xdg_toplevel_state *state = wl_array_add(&states, sizeof(*state));
@@ -341,6 +422,209 @@ static void wm_base_bind(struct wl_client *client, void *data, uint32_t version,
 	wl_resource_set_implementation(resource, &wm_base_impl, data, NULL);
 }
 
+//--- coreとのプロトコル -----------------------------------------------------------
+
+static struct backend *create_backend(struct server *server) {
+	if (strcmp(server->backend_name, "headless") == 0) {
+		return backend_headless_create(server->width, server->height, server->dump_path);
+	}
+	if (strcmp(server->backend_name, "drm") == 0) {
+		return backend_drm_create(server->drm_device, server->width, server->height);
+	}
+	if (strcmp(server->backend_name, "window") == 0) {
+		return backend_window_create(server->display, server->width, server->height);
+	}
+	fprintf(stderr, "rtv-display: unknown backend '%s'\n", server->backend_name);
+	return NULL;
+}
+
+static uint64_t read_u64be(const uint8_t *data) {
+	uint64_t value = 0;
+	for (int i = 0; i < 8; i++) {
+		value = (value << 8) | data[i];
+	}
+	return value;
+}
+
+static struct display_object *find_object(struct server *server, uint64_t id) {
+	struct display_object *object;
+	wl_list_for_each(object, &server->objects, link) {
+		if (object->id == id) {
+			return object;
+		}
+	}
+	return NULL;
+}
+
+//位置・サイズ（32バイト）と色（4バイト）をオブジェクトへ反映する
+static void apply_geometry_color(struct display_object *object, const uint8_t *geometry, const uint8_t *color) {
+	object->x = read_u64be(geometry);
+	object->y = read_u64be(geometry + 8);
+	object->width = read_u64be(geometry + 16);
+	object->height = read_u64be(geometry + 24);
+	object->r = color[0];
+	object->g = color[1];
+	object->b = color[2];
+	object->a = color[3];
+}
+
+static uint8_t handle_command(struct server *server, uint8_t command, struct proto_arg *args, int argc) {
+	switch (command) {
+	case COMMAND_INIT:
+		//初期化: ここでバックエンドを作り、画面が出る/切り替わる
+		if (server->backend != NULL) {
+			return STATUS_OK;
+		}
+		server->backend = create_backend(server);
+		if (server->backend == NULL) {
+			return STATUS_ERROR;
+		}
+		render(server);
+		return STATUS_OK;
+	case COMMAND_CREATE_OBJECT: {
+		//引数1: ID(u64 BE)、引数2: 種類(u8)、
+		//引数3: X・Y・横幅・縦幅(各u64 BE)、引数4: 色(R・G・B・A)
+		if (argc != 4 || args[0].size != 8 || args[1].size != 1 || args[2].size != 32 || args[3].size != 4) {
+			fprintf(stderr, "rtv-display: create object: bad args\n");
+			return STATUS_ERROR;
+		}
+		uint8_t type = args[1].data[0];
+		if (type != OBJECT_TYPE_RECT) {
+			fprintf(stderr, "rtv-display: create object: unknown type 0x%02X\n", type);
+			return STATUS_ERROR;
+		}
+		uint64_t id = read_u64be(args[0].data);
+		struct display_object *object = find_object(server, id);
+		if (object == NULL) {
+			object = calloc(1, sizeof(*object));
+			object->id = id;
+			//作った順に手前へ描くので末尾へ足す
+			wl_list_insert(server->objects.prev, &object->link);
+		}
+		object->type = type;
+		apply_geometry_color(object, args[2].data, args[3].data);
+		render(server);
+		return STATUS_OK;
+	}
+	case COMMAND_UPDATE_OBJECT: {
+		//引数1: ID(u64 BE)、引数2: X・Y・横幅・縦幅、引数3: 色
+		if (argc != 3 || args[0].size != 8 || args[1].size != 32 || args[2].size != 4) {
+			fprintf(stderr, "rtv-display: update object: bad args\n");
+			return STATUS_ERROR;
+		}
+		struct display_object *object = find_object(server, read_u64be(args[0].data));
+		if (object == NULL) {
+			fprintf(stderr, "rtv-display: update object: no such id\n");
+			return STATUS_ERROR;
+		}
+		apply_geometry_color(object, args[1].data, args[2].data);
+		render(server);
+		return STATUS_OK;
+	}
+	case COMMAND_DELETE_OBJECT: {
+		//引数1: ID(u64 BE)
+		if (argc != 1 || args[0].size != 8) {
+			fprintf(stderr, "rtv-display: delete object: bad args\n");
+			return STATUS_ERROR;
+		}
+		struct display_object *object = find_object(server, read_u64be(args[0].data));
+		if (object == NULL) {
+			fprintf(stderr, "rtv-display: delete object: no such id\n");
+			return STATUS_ERROR;
+		}
+		wl_list_remove(&object->link);
+		free(object);
+		render(server);
+		return STATUS_OK;
+	}
+	case COMMAND_DELETE_ALL_OBJECTS: {
+		//引数なし。全オブジェクトを消す。
+		if (argc != 0) {
+			fprintf(stderr, "rtv-display: delete all objects: bad args\n");
+			return STATUS_ERROR;
+		}
+		struct display_object *object;
+		struct display_object *tmp;
+		wl_list_for_each_safe(object, tmp, &server->objects, link) {
+			wl_list_remove(&object->link);
+			free(object);
+		}
+		render(server);
+		return STATUS_OK;
+	}
+	default:
+		fprintf(stderr, "rtv-display: unknown command 0x%02X\n", command);
+		return STATUS_ERROR;
+	}
+}
+
+//バッファ先頭のフレームを1つ解釈する。完結していなければ0、
+//解釈できたら消費したバイト数を返す。
+static size_t parse_frame(struct server *server, struct proto_arg *args, uint8_t *command_out, int *argc_out) {
+	if (server->in_length < 2) {
+		return 0;
+	}
+	uint8_t command = server->in_buffer[0];
+	int argc = server->in_buffer[1];
+	size_t pos = 2;
+	for (int i = 0; i < argc; i++) {
+		if (pos >= server->in_length) {
+			return 0;
+		}
+		uint8_t size = server->in_buffer[pos];
+		pos += 1;
+		if (pos + size > server->in_length) {
+			return 0;
+		}
+		args[i].data = server->in_buffer + pos;
+		args[i].size = size;
+		pos += size;
+	}
+	*command_out = command;
+	*argc_out = argc;
+	return pos;
+}
+
+static int stdin_callback(int fd, uint32_t mask, void *data) {
+	struct server *server = data;
+	if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+		wl_display_terminate(server->display);
+		return 0;
+	}
+	ssize_t n = read(fd, server->in_buffer + server->in_length, sizeof(server->in_buffer) - server->in_length);
+	if (n == 0) {
+		//coreが標準入力を閉じた（＝終了した）ので自分も終わる
+		fprintf(stderr, "rtv-display: stdin closed, exiting\n");
+		wl_display_terminate(server->display);
+		return 0;
+	}
+	if (n < 0) {
+		return 0;
+	}
+	server->in_length += (size_t)n;
+	for (;;) {
+		struct proto_arg args[MAX_ARGS];
+		uint8_t command = 0;
+		int argc = 0;
+		size_t consumed = parse_frame(server, args, &command, &argc);
+		if (consumed == 0) {
+			break;
+		}
+		uint8_t status = handle_command(server, command, args, argc);
+		uint8_t response = status;
+		if (write(STDOUT_FILENO, &response, 1) < 0) {
+			fprintf(stderr, "rtv-display: failed to write response\n");
+		}
+		memmove(server->in_buffer, server->in_buffer + consumed, server->in_length - consumed);
+		server->in_length -= consumed;
+	}
+	if (server->in_length == sizeof(server->in_buffer)) {
+		fprintf(stderr, "rtv-display: protocol buffer overflow, exiting\n");
+		wl_display_terminate(server->display);
+	}
+	return 0;
+}
+
 //--- main ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
@@ -368,25 +652,18 @@ int main(int argc, char **argv) {
 
 	struct server server = {0};
 	wl_list_init(&server.surfaces);
+	wl_list_init(&server.objects);
 	server.display = wl_display_create();
 	if (server.display == NULL) {
 		fprintf(stderr, "rtv-display: wl_display_create failed\n");
 		return 1;
 	}
-	if (strcmp(backend_name, "headless") == 0) {
-		server.backend = backend_headless_create(width, height, dump_path);
-	} else if (strcmp(backend_name, "drm") == 0) {
-		server.backend = backend_drm_create(drm_device, width, height);
-	} else if (strcmp(backend_name, "window") == 0) {
-		server.backend = backend_window_create(server.display, width, height);
-	} else {
-		fprintf(stderr, "rtv-display: unknown backend '%s' (headless|drm|window)\n", backend_name);
-		return 1;
-	}
-	if (server.backend == NULL) {
-		fprintf(stderr, "rtv-display: backend '%s' failed to start\n", backend_name);
-		return 1;
-	}
+	//バックエンドは作らない。初期化コマンド(0x00)が来て初めて画面が出る。
+	server.backend_name = backend_name;
+	server.dump_path = dump_path;
+	server.drm_device = drm_device;
+	server.width = width;
+	server.height = height;
 	wl_global_create(server.display, &wl_compositor_interface, 4, &server, compositor_bind);
 	wl_display_init_shm(server.display);
 	wl_global_create(server.display, &wl_output_interface, 2, &server, output_bind);
@@ -406,10 +683,13 @@ int main(int argc, char **argv) {
 			return 1;
 		}
 	}
-	render(&server);
-	fprintf(stderr, "rtv-display: listening on %s (%dx%d, backend %s)\n", name, server.backend->width, server.backend->height, backend_name);
+	struct wl_event_loop *loop = wl_display_get_event_loop(server.display);
+	wl_event_loop_add_fd(loop, STDIN_FILENO, WL_EVENT_READABLE, stdin_callback, &server);
+	fprintf(stderr, "rtv-display: listening on %s (%dx%d, backend %s, waiting for init command)\n", name, width, height, backend_name);
 	wl_display_run(server.display);
 	wl_display_destroy(server.display);
-	server.backend->destroy(server.backend);
+	if (server.backend != NULL) {
+		server.backend->destroy(server.backend);
+	}
 	return 0;
 }
