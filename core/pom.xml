@@ -2,10 +2,10 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>jp.rumi_room</groupId>
-	<artifactId>raspberrypi-tv</artifactId>
+	<artifactId>raspberrypi_tv</artifactId>
 	<packaging>jar</packaging>
-	<version>1.0-SNAPSHOT</version>
-	<name>raspberrypi-tv</name>
+	<version>1.0</version>
+	<name>raspberrypi_tv</name>
 	<url>http://maven.apache.org</url>
 
 	<properties>
@@ -49,10 +49,7 @@
 					<appendAssemblyId>false</appendAssemblyId>
 					<archive>
 						<manifest>
-							<!-- mainClass の package 部分は archetype:generate 実行時に
-							     生成先プロジェクトの package へ置き換えられる。
-							     こうしておけば Main.java の package と必ず一致する。 -->
-							<mainClass>jp.rumi_room.Main</mainClass>
+							<mainClass>jp.rumi_room.raspberrypi_tv.Main</mainClass>
 						</manifest>
 					</archive>
 					<descriptorRefs>
