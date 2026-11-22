@@ -75,7 +75,7 @@ public class HdmiCec {
 	private boolean stream_closed;
 
 	public HdmiCec() {
-		this("hdmi-cec/rtv-cec");
+		this("./rtv-cec");
 	}
 
 	public HdmiCec(String... command_line) {

@@ -36,7 +36,7 @@ public class Display {
 	private final List<DisplayObject> objects = new ArrayList<>();
 
 	public Display() {
-		this("display/rtv-display");
+		this("./rtv-display");
 	}
 
 	public Display(String... command_line) {

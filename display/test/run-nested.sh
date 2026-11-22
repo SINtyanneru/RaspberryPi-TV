@@ -14,13 +14,13 @@ mkfifo "$PARENT_FIFO" "$CHILD_FIFO"
 trap 'kill $CHILD_PID $PARENT_PID 2>/dev/null; rm -rf "$RUN_DIR"' EXIT
 rm -f frame.ppm parent-response.bin child-response.bin
 
-./rtv-display --socket wayland-parent --dump frame.ppm < "$PARENT_FIFO" > parent-response.bin &
+../build/rtv-display --socket wayland-parent --dump frame.ppm < "$PARENT_FIFO" > parent-response.bin &
 PARENT_PID=$!
 exec 3>"$PARENT_FIFO"
 printf '\000\000' >&3
 sleep 1
 
-WAYLAND_DISPLAY=wayland-parent ./rtv-display --backend window --socket wayland-child < "$CHILD_FIFO" > child-response.bin &
+WAYLAND_DISPLAY=wayland-parent ../build/rtv-display --backend window --socket wayland-child < "$CHILD_FIFO" > child-response.bin &
 CHILD_PID=$!
 exec 4>"$CHILD_FIFO"
 printf '\000\000' >&4
@@ -35,7 +35,7 @@ for f in parent-response.bin child-response.bin; do
 done
 echo "init: both status 0x20 OK"
 
-WAYLAND_DISPLAY=wayland-child ./rtv-test-client
+WAYLAND_DISPLAY=wayland-child ../build/rtv-test-client
 sleep 1
 
 ls -l frame.ppm

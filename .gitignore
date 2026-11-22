@@ -61,3 +61,5 @@ buildNumber.properties
 .project
 # JDT-specific (Eclipse Java Development Tools)
 .classpath
+#ビルド成果物
+/build/

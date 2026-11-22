@@ -12,7 +12,7 @@ mkfifo "$FIFO"
 trap 'kill $DISPLAY_PID 2>/dev/null; rm -rf "$RUN_DIR"' EXIT
 rm -f frame.ppm response.bin
 
-./rtv-display --socket wayland-rtv --dump frame.ppm < "$FIFO" > response.bin &
+../build/rtv-display --socket wayland-rtv --dump frame.ppm < "$FIFO" > response.bin &
 DISPLAY_PID=$!
 exec 3>"$FIFO"
 sleep 1
@@ -30,7 +30,7 @@ if [ "$STATUS" != "32" ]; then
 fi
 echo "init: status 0x20 OK, frame appeared after init"
 
-WAYLAND_DISPLAY=wayland-rtv ./rtv-test-client
+WAYLAND_DISPLAY=wayland-rtv ../build/rtv-test-client
 sleep 1
 
 ls -l frame.ppm

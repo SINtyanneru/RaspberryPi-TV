@@ -7,14 +7,15 @@ cd "$(dirname "$0")"
 CC=${CC:-clang}
 CFLAGS="-std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -g"
 GEN=gen
+OUT=../build
 
 if [ "$1" = "clean" ]; then
-	rm -rf "$GEN" rtv-display rtv-test-client frame.ppm frame.png child-fb.ppm
+	rm -rf "$GEN" rtv-display rtv-test-client "$OUT/rtv-display" "$OUT/rtv-test-client" frame.ppm frame.png child-fb.ppm
 	echo "cleaned"
 	exit 0
 fi
 
-mkdir -p "$GEN"
+mkdir -p "$GEN" "$OUT"
 wayland-scanner server-header protocol/xdg-shell.xml "$GEN/xdg-shell-protocol.h"
 wayland-scanner private-code protocol/xdg-shell.xml "$GEN/xdg-shell-protocol.c"
 wayland-scanner client-header protocol/xdg-shell.xml "$GEN/xdg-shell-client-protocol.h"
@@ -53,13 +54,13 @@ CLIENT_CFLAGS=$(pkg-config --cflags wayland-client)
 CLIENT_LIBS=$(pkg-config --libs wayland-client)
 
 $CC $CFLAGS $DRM_DEFINE $TEXT_DEFINE -I"$GEN" -Isrc $SERVER_CFLAGS $DRM_CFLAGS $TEXT_CFLAGS \
-	-o rtv-display \
+	-o "$OUT/rtv-display" \
 	src/main.c src/backend_headless.c src/backend_drm.c src/backend_window.c \
 	"$GEN/xdg-shell-protocol.c" \
 	$SERVER_LIBS $DRM_LIBS $TEXT_LIBS -lm
 
 $CC $CFLAGS -I"$GEN" $CLIENT_CFLAGS \
-	-o rtv-test-client \
+	-o "$OUT/rtv-test-client" \
 	test/test-client.c "$GEN/xdg-shell-client-protocol.c" \
 	$CLIENT_LIBS
 

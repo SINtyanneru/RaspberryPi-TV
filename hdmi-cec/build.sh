@@ -2,9 +2,10 @@
 #hdmi-cecコンポーネントのビルド。libcecが無い環境ではスキップする。
 set -e
 cd "$(dirname "$0")"
+OUT=../build
 
 if [ "$1" = "clean" ]; then
-	rm -f rtv-cec
+	rm -f rtv-cec "$OUT/rtv-cec"
 	exit 0
 fi
 
@@ -22,12 +23,13 @@ else
 	exit 0
 fi
 
+mkdir -p "$OUT"
 OBJC_INCLUDE=$(gcc -print-file-name=include)
 
 #Objective-C++としてコンパイルする。ObjCランタイムはGCCランタイムを使う。
 clang++ -std=c++17 -Wall -Wextra -Wno-unused-parameter -O2 -g \
 	-I"$OBJC_INCLUDE" $CEC_CFLAGS \
-	-o rtv-cec src/cec_client.mm \
+	-o "$OUT/rtv-cec" src/cec_client.mm \
 	$CEC_LIBS -lobjc -lpthread
 
 echo "built: rtv-cec"
