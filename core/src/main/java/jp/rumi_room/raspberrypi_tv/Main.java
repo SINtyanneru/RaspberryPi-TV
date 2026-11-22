@@ -7,15 +7,22 @@ import jp.rumi_room.raspberrypi_tv.Type.DisplayText;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayTriangle;
 
 //デモ用のMain。displayを初期化して図形と文字を描き、そのまま待機する。
-//引数にwindowを指定するとwindowバックエンドで起動する（debug.shが使う）。
-//headlessバックエンドでは、描画結果はframe.ppmへ書き出される。
+//通常起動は実機用にDRM/KMSへ直接出す。
+//--devを付けるとデバッグ起動になり、windowバックエンドで起動する
+//（debug.shがWeston経由でこの形で呼ぶ）。
 public class Main {
 	public static void main(String[] args) throws Exception {
+		boolean dev = false;
+		for (String arg : args) {
+			if (arg.equals("--dev")) {
+				dev = true;
+			}
+		}
 		Display display;
-		if (args.length > 0 && args[0].equals("window")) {
+		if (dev) {
 			display = new Display("./rtv-display", "--backend", "window");
 		} else {
-			display = new Display();
+			display = new Display("./rtv-display", "--backend", "drm");
 		}
 		display.init();
 		display.start();

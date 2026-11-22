@@ -36,5 +36,5 @@ if [ ! -S "$XDG_RUNTIME_DIR/wayland-rtv" ]; then
 	exit 1
 fi
 
-WAYLAND_DISPLAY=wayland-rtv java -jar raspberrypi_tv-1.0-full.jar window
+WAYLAND_DISPLAY=wayland-rtv java -jar raspberrypi_tv-1.0-full.jar --dev
 cd ../
