@@ -10,7 +10,11 @@ import jp.rumi_room.raspberrypi_tv.Display;
 public abstract class DisplayObject {
 	//オブジェクトの種類。数字はプロトコルの種別コード。
 	public enum Type {
-		RECT((byte) 0x01);
+		RECT((byte) 0x01),
+		TRIANGLE((byte) 0x02),
+		LINE((byte) 0x03),
+		CIRCLE((byte) 0x04),
+		TEXT((byte) 0x05);
 
 		private final byte code;
 

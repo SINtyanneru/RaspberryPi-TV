@@ -4,6 +4,7 @@
 //標準出力は将来のJava本体とのバイナリプロトコル用に空けるため、
 //ログはすべて標準エラーへ出すこと。
 #define _POSIX_C_SOURCE 200809L
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,14 @@
 #include <unistd.h>
 
 #include <wayland-server.h>
+
+#ifdef HAVE_TEXT
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#ifdef HAVE_FONTCONFIG
+#include <fontconfig/fontconfig.h>
+#endif
+#endif
 
 #include "backend.h"
 #include "xdg-shell-protocol.h"
@@ -31,6 +40,10 @@
 #define COMMAND_DELETE_OBJECT 0x03
 #define COMMAND_DELETE_ALL_OBJECTS 0x04
 #define OBJECT_TYPE_RECT 0x01
+#define OBJECT_TYPE_TRIANGLE 0x02
+#define OBJECT_TYPE_LINE 0x03
+#define OBJECT_TYPE_CIRCLE 0x04
+#define OBJECT_TYPE_TEXT 0x05
 #define MAX_ARGS 255
 #define IN_BUFFER_SIZE 65536
 
@@ -40,6 +53,12 @@ struct proto_arg {
 };
 
 //coreから作られたオブジェクト。IDとの対応表はこのプロセスが持つ。
+//座標フィールドの使い方は種類による:
+// 四角形: x,y=左上、width,height
+// 三角形: (x,y),(x2,y2),(x3,y3)=3頂点
+// 直線: (x,y)=始点、(x2,y2)=終点
+// 円: x,y=中心、radius=半径
+// テキスト: x,y=左上、size=ピクセルサイズ、text=文字列(UTF-8)
 struct display_object {
 	uint64_t id;
 	uint8_t type;
@@ -47,6 +66,13 @@ struct display_object {
 	uint64_t y;
 	uint64_t width;
 	uint64_t height;
+	uint64_t x2;
+	uint64_t y2;
+	uint64_t x3;
+	uint64_t y3;
+	uint64_t radius;
+	uint64_t size;
+	char *text;
 	uint8_t r;
 	uint8_t g;
 	uint8_t b;
@@ -69,6 +95,12 @@ struct server {
 	//プロトコル受信バッファ
 	uint8_t in_buffer[IN_BUFFER_SIZE];
 	size_t in_length;
+#ifdef HAVE_TEXT
+	//テキスト描画用フォント（UDEV Gothic）。初回利用時に読み込む。
+	FT_Library ft_library;
+	FT_Face ft_face;
+	int ft_failed;
+#endif
 };
 
 struct xdg_surface_data;
@@ -97,6 +129,387 @@ static uint32_t now_msec(void) {
 }
 
 //--- 合成 -----------------------------------------------------------------
+
+//座標計算用にu64をint64へ飽和させる（画面より遥かに大きい値は丸めてよい）
+static int64_t sat_coord(uint64_t value) {
+	if (value > (1 << 24)) {
+		return 1 << 24;
+	}
+	return (int64_t)value;
+}
+
+static uint64_t isqrt_u64(uint64_t value) {
+	uint64_t root = (uint64_t)sqrt((double)value);
+	while ((root + 1) * (root + 1) <= value) {
+		root++;
+	}
+	while (root * root > value) {
+		root--;
+	}
+	return root;
+}
+
+//1画素をアルファ合成で描く（範囲外・完全透明なら何もしない）
+static void blend_pixel(struct server *server, int64_t x, int64_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+	struct backend *backend = server->backend;
+	if (a == 0 || x < 0 || y < 0 || x >= backend->width || y >= backend->height) {
+		return;
+	}
+	uint32_t *dst = &backend->pixels[y * backend->width + x];
+	if (a == 0xFF) {
+		*dst = 0xFF000000 | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+		return;
+	}
+	uint32_t nr = ((uint32_t)r * a + ((*dst >> 16) & 0xFF) * (0xFF - a)) / 0xFF;
+	uint32_t ng = ((uint32_t)g * a + ((*dst >> 8) & 0xFF) * (0xFF - a)) / 0xFF;
+	uint32_t nb = ((uint32_t)b * a + (*dst & 0xFF) * (0xFF - a)) / 0xFF;
+	*dst = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
+}
+
+static void draw_rect(struct server *server, struct display_object *object) {
+	struct backend *backend = server->backend;
+	int width = backend->width;
+	int height = backend->height;
+	if (object->x >= (uint64_t)width || object->y >= (uint64_t)height) {
+		return;
+	}
+	uint64_t x1 = object->x + object->width;
+	if (x1 > (uint64_t)width || x1 < object->x) {
+		x1 = (uint64_t)width;
+	}
+	uint64_t y1 = object->y + object->height;
+	if (y1 > (uint64_t)height || y1 < object->y) {
+		y1 = (uint64_t)height;
+	}
+	for (uint64_t y = object->y; y < y1; y++) {
+		for (uint64_t x = object->x; x < x1; x++) {
+			uint32_t *dst = &backend->pixels[y * (uint64_t)width + x];
+			if (object->a == 0xFF) {
+				*dst = 0xFF000000 | ((uint32_t)object->r << 16) | ((uint32_t)object->g << 8) | object->b;
+			} else {
+				uint32_t a = object->a;
+				uint32_t r = (object->r * a + ((*dst >> 16) & 0xFF) * (0xFF - a)) / 0xFF;
+				uint32_t g = (object->g * a + ((*dst >> 8) & 0xFF) * (0xFF - a)) / 0xFF;
+				uint32_t b = (object->b * a + (*dst & 0xFF) * (0xFF - a)) / 0xFF;
+				*dst = 0xFF000000 | (r << 16) | (g << 8) | b;
+			}
+		}
+	}
+}
+
+static int64_t edge_function(int64_t ax, int64_t ay, int64_t bx, int64_t by, int64_t px, int64_t py) {
+	return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+}
+
+static void draw_triangle(struct server *server, struct display_object *object) {
+	struct backend *backend = server->backend;
+	int64_t vx[3];
+	int64_t vy[3];
+	vx[0] = sat_coord(object->x);
+	vy[0] = sat_coord(object->y);
+	vx[1] = sat_coord(object->x2);
+	vy[1] = sat_coord(object->y2);
+	vx[2] = sat_coord(object->x3);
+	vy[2] = sat_coord(object->y3);
+	int64_t min_x = vx[0];
+	int64_t max_x = vx[0];
+	int64_t min_y = vy[0];
+	int64_t max_y = vy[0];
+	for (int i = 1; i < 3; i++) {
+		if (vx[i] < min_x) min_x = vx[i];
+		if (vx[i] > max_x) max_x = vx[i];
+		if (vy[i] < min_y) min_y = vy[i];
+		if (vy[i] > max_y) max_y = vy[i];
+	}
+	if (min_x < 0) min_x = 0;
+	if (min_y < 0) min_y = 0;
+	if (max_x > backend->width - 1) max_x = backend->width - 1;
+	if (max_y > backend->height - 1) max_y = backend->height - 1;
+	for (int64_t y = min_y; y <= max_y; y++) {
+		for (int64_t x = min_x; x <= max_x; x++) {
+			int64_t e0 = edge_function(vx[0], vy[0], vx[1], vy[1], x, y);
+			int64_t e1 = edge_function(vx[1], vy[1], vx[2], vy[2], x, y);
+			int64_t e2 = edge_function(vx[2], vy[2], vx[0], vy[0], x, y);
+			int inside = (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0);
+			if (inside) {
+				blend_pixel(server, x, y, object->r, object->g, object->b, object->a);
+			}
+		}
+	}
+}
+
+static void draw_line(struct server *server, struct display_object *object) {
+	struct backend *backend = server->backend;
+	int64_t x0 = sat_coord(object->x);
+	int64_t y0 = sat_coord(object->y);
+	int64_t x1 = sat_coord(object->x2);
+	int64_t y1 = sat_coord(object->y2);
+	int64_t dx = x1 - x0;
+	int64_t dy = y1 - y0;
+	int64_t adx = dx < 0 ? -dx : dx;
+	int64_t ady = dy < 0 ? -dy : dy;
+	int64_t steps = adx > ady ? adx : ady;
+	if (steps == 0) {
+		blend_pixel(server, x0, y0, object->r, object->g, object->b, object->a);
+		return;
+	}
+	//Liang-Barsky法で、画面内に入る区間[t0,t1]だけを描く
+	double t0 = 0.0;
+	double t1 = 1.0;
+	double p[4] = {-(double)dx, (double)dx, -(double)dy, (double)dy};
+	double q[4] = {(double)x0, (double)(backend->width - 1 - x0), (double)y0, (double)(backend->height - 1 - y0)};
+	for (int i = 0; i < 4; i++) {
+		if (p[i] == 0.0) {
+			if (q[i] < 0.0) {
+				return;
+			}
+			continue;
+		}
+		double t = q[i] / p[i];
+		if (p[i] < 0.0) {
+			if (t > t1) {
+				return;
+			}
+			if (t > t0) {
+				t0 = t;
+			}
+		} else {
+			if (t < t0) {
+				return;
+			}
+			if (t < t1) {
+				t1 = t;
+			}
+		}
+	}
+	int64_t i_from = (int64_t)ceil(t0 * (double)steps);
+	int64_t i_to = (int64_t)floor(t1 * (double)steps);
+	for (int64_t i = i_from; i <= i_to; i++) {
+		int64_t x = x0 + (int64_t)llround((double)dx * (double)i / (double)steps);
+		int64_t y = y0 + (int64_t)llround((double)dy * (double)i / (double)steps);
+		blend_pixel(server, x, y, object->r, object->g, object->b, object->a);
+	}
+}
+
+static void draw_circle(struct server *server, struct display_object *object) {
+	struct backend *backend = server->backend;
+	int64_t cx = sat_coord(object->x);
+	int64_t cy = sat_coord(object->y);
+	int64_t radius = sat_coord(object->radius);
+	int64_t y_from = cy - radius;
+	if (y_from < 0) {
+		y_from = 0;
+	}
+	int64_t y_to = cy + radius;
+	if (y_to > backend->height - 1) {
+		y_to = backend->height - 1;
+	}
+	for (int64_t y = y_from; y <= y_to; y++) {
+		int64_t dy = y - cy;
+		uint64_t dx = isqrt_u64((uint64_t)(radius * radius - dy * dy));
+		int64_t x_from = cx - (int64_t)dx;
+		if (x_from < 0) {
+			x_from = 0;
+		}
+		int64_t x_to = cx + (int64_t)dx;
+		if (x_to > backend->width - 1) {
+			x_to = backend->width - 1;
+		}
+		for (int64_t x = x_from; x <= x_to; x++) {
+			blend_pixel(server, x, y, object->r, object->g, object->b, object->a);
+		}
+	}
+}
+
+#ifdef HAVE_TEXT
+//フォントファイルの場所を探す。環境変数RTV_FONT、fontconfig(UDEV Gothic)、
+//決め打ちパスの順に探し、見つけたら静的バッファへ入れて返す。
+static const char *find_font_path(void) {
+	static char buffer[1024];
+	buffer[0] = '\0';
+	const char *env = getenv("RTV_FONT");
+	if (env != NULL && env[0] != '\0') {
+		snprintf(buffer, sizeof(buffer), "%s", env);
+		return buffer;
+	}
+#ifdef HAVE_FONTCONFIG
+	FcPattern *pattern = FcNameParse((const FcChar8 *)"UDEV Gothic");
+	if (pattern != NULL) {
+		FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+		FcDefaultSubstitute(pattern);
+		FcResult result;
+		FcPattern *matched = FcFontMatch(NULL, pattern, &result);
+		if (matched != NULL) {
+			FcChar8 *file = NULL;
+			if (FcPatternGetString(matched, FC_FILE, 0, &file) == FcResultMatch && file != NULL) {
+				snprintf(buffer, sizeof(buffer), "%s", (const char *)file);
+			}
+			FcPatternDestroy(matched);
+		}
+		FcPatternDestroy(pattern);
+	}
+	if (buffer[0] != '\0') {
+		return buffer;
+	}
+#endif
+	char home_path[1024];
+	home_path[0] = '\0';
+	const char *home = getenv("HOME");
+	if (home != NULL) {
+		snprintf(home_path, sizeof(home_path), "%s/.local/share/fonts/UDEVGothic-Regular.ttf", home);
+	}
+	const char *candidates[] = {
+		"/usr/share/fonts/truetype/udev-gothic/UDEVGothic-Regular.ttf",
+		"/usr/share/fonts/opentype/udev-gothic/UDEVGothic-Regular.ttf",
+		home_path,
+		"UDEVGothic-Regular.ttf",
+		NULL,
+	};
+	for (int i = 0; candidates[i] != NULL; i++) {
+		if (candidates[i][0] != '\0' && access(candidates[i], R_OK) == 0) {
+			snprintf(buffer, sizeof(buffer), "%s", candidates[i]);
+			return buffer;
+		}
+	}
+	return NULL;
+}
+
+//フォントを読み込む（初回だけ）。成功したら1。
+static int ensure_font(struct server *server) {
+	if (server->ft_face != NULL) {
+		return 1;
+	}
+	if (server->ft_failed) {
+		return 0;
+	}
+	server->ft_failed = 1;
+	if (FT_Init_FreeType(&server->ft_library) != 0) {
+		fprintf(stderr, "rtv-display: FT_Init_FreeType failed\n");
+		return 0;
+	}
+	const char *path = find_font_path();
+	if (path == NULL) {
+		fprintf(stderr, "rtv-display: UDEV Gothic font not found\n");
+		return 0;
+	}
+	if (FT_New_Face(server->ft_library, path, 0, &server->ft_face) != 0) {
+		fprintf(stderr, "rtv-display: failed to load font: %s\n", path);
+		server->ft_face = NULL;
+		return 0;
+	}
+	fprintf(stderr, "rtv-display: font loaded: %s\n", path);
+	server->ft_failed = 0;
+	return 1;
+}
+
+//UTF-8を1文字読んでポインタを進める。不正な並びはU+FFFDにする。
+static uint32_t utf8_decode(const uint8_t **cursor) {
+	const uint8_t *p = *cursor;
+	uint32_t cp;
+	int extra;
+	if (p[0] < 0x80) {
+		cp = p[0];
+		extra = 0;
+	} else if ((p[0] & 0xE0) == 0xC0) {
+		cp = p[0] & 0x1F;
+		extra = 1;
+	} else if ((p[0] & 0xF0) == 0xE0) {
+		cp = p[0] & 0x0F;
+		extra = 2;
+	} else if ((p[0] & 0xF8) == 0xF0) {
+		cp = p[0] & 0x07;
+		extra = 3;
+	} else {
+		*cursor = p + 1;
+		return 0xFFFD;
+	}
+	for (int i = 0; i < extra; i++) {
+		if ((p[1 + i] & 0xC0) != 0x80) {
+			*cursor = p + 1;
+			return 0xFFFD;
+		}
+		cp = (cp << 6) | (p[1 + i] & 0x3F);
+	}
+	*cursor = p + 1 + extra;
+	return cp;
+}
+
+static void draw_text(struct server *server, struct display_object *object) {
+	if (object->text == NULL || object->size == 0) {
+		return;
+	}
+	if (!ensure_font(server)) {
+		return;
+	}
+	FT_Face face = server->ft_face;
+	uint64_t size = object->size;
+	if (size > 2048) {
+		size = 2048;
+	}
+	FT_Set_Pixel_Sizes(face, 0, (FT_UInt)size);
+	int64_t pen_x = sat_coord(object->x);
+	//yはテキストの上端。ベースラインはアセント分だけ下。
+	int64_t baseline = sat_coord(object->y) + (face->size->metrics.ascender >> 6);
+	const uint8_t *cursor = (const uint8_t *)object->text;
+	while (*cursor != '\0') {
+		uint32_t cp = utf8_decode(&cursor);
+		if (FT_Load_Char(face, cp, FT_LOAD_RENDER) != 0) {
+			continue;
+		}
+		FT_GlyphSlot glyph = face->glyph;
+		FT_Bitmap *bitmap = &glyph->bitmap;
+		int64_t gx = pen_x + glyph->bitmap_left;
+		int64_t gy = baseline - glyph->bitmap_top;
+		for (unsigned int row = 0; row < bitmap->rows; row++) {
+			for (unsigned int col = 0; col < bitmap->width; col++) {
+				uint8_t coverage = bitmap->buffer[row * (unsigned int)bitmap->pitch + col];
+				if (coverage == 0) {
+					continue;
+				}
+				uint8_t alpha = (uint8_t)((uint32_t)object->a * coverage / 0xFF);
+				blend_pixel(server, gx + (int64_t)col, gy + (int64_t)row, object->r, object->g, object->b, alpha);
+			}
+		}
+		pen_x += glyph->advance.x >> 6;
+	}
+}
+#else
+static int ensure_font(struct server *server) {
+	(void)server;
+	return 0;
+}
+
+static void draw_text(struct server *server, struct display_object *object) {
+	//FreeType無しでビルドした場合はテキストを描かない（作成時点でエラーにしている）
+	(void)server;
+	(void)object;
+}
+#endif
+
+static void draw_object(struct server *server, struct display_object *object) {
+	if (object->a == 0) {
+		return;
+	}
+	switch (object->type) {
+	case OBJECT_TYPE_RECT:
+		draw_rect(server, object);
+		break;
+	case OBJECT_TYPE_TRIANGLE:
+		draw_triangle(server, object);
+		break;
+	case OBJECT_TYPE_LINE:
+		draw_line(server, object);
+		break;
+	case OBJECT_TYPE_CIRCLE:
+		draw_circle(server, object);
+		break;
+	case OBJECT_TYPE_TEXT:
+		draw_text(server, object);
+		break;
+	default:
+		break;
+	}
+}
 
 static void render(struct server *server) {
 	if (server->backend == NULL) {
@@ -159,34 +572,7 @@ static void render(struct server *server) {
 	//オブジェクト（UI）はサーフェスの上に描く
 	struct display_object *object;
 	wl_list_for_each(object, &server->objects, link) {
-		if (object->type != OBJECT_TYPE_RECT || object->a == 0) {
-			continue;
-		}
-		if (object->x >= (uint64_t)width || object->y >= (uint64_t)height) {
-			continue;
-		}
-		uint64_t x1 = object->x + object->width;
-		if (x1 > (uint64_t)width || x1 < object->x) {
-			x1 = (uint64_t)width;
-		}
-		uint64_t y1 = object->y + object->height;
-		if (y1 > (uint64_t)height || y1 < object->y) {
-			y1 = (uint64_t)height;
-		}
-		for (uint64_t y = object->y; y < y1; y++) {
-			for (uint64_t x = object->x; x < x1; x++) {
-				uint32_t *dst = &backend->pixels[y * (uint64_t)width + x];
-				if (object->a == 0xFF) {
-					*dst = 0xFF000000 | ((uint32_t)object->r << 16) | ((uint32_t)object->g << 8) | object->b;
-				} else {
-					uint32_t a = object->a;
-					uint32_t r = (object->r * a + ((*dst >> 16) & 0xFF) * (0xFF - a)) / 0xFF;
-					uint32_t g = (object->g * a + ((*dst >> 8) & 0xFF) * (0xFF - a)) / 0xFF;
-					uint32_t b = (object->b * a + (*dst & 0xFF) * (0xFF - a)) / 0xFF;
-					*dst = 0xFF000000 | (r << 16) | (g << 8) | b;
-				}
-			}
-		}
+		draw_object(server, object);
 	}
 	backend->present(backend);
 }
@@ -456,16 +842,93 @@ static struct display_object *find_object(struct server *server, uint64_t id) {
 	return NULL;
 }
 
-//位置・サイズ（32バイト）と色（4バイト）をオブジェクトへ反映する
-static void apply_geometry_color(struct display_object *object, const uint8_t *geometry, const uint8_t *color) {
-	object->x = read_u64be(geometry);
-	object->y = read_u64be(geometry + 8);
-	object->width = read_u64be(geometry + 16);
-	object->height = read_u64be(geometry + 24);
+static void apply_color(struct display_object *object, const uint8_t *color) {
 	object->r = color[0];
 	object->g = color[1];
 	object->b = color[2];
 	object->a = color[3];
+}
+
+//テキストオブジェクトの文字列を差し替える（dataがNULLなら解放だけ）。
+static void set_object_text(struct display_object *object, const uint8_t *data, uint8_t size) {
+	free(object->text);
+	object->text = NULL;
+	if (data == NULL) {
+		return;
+	}
+	object->text = malloc((size_t)size + 1);
+	memcpy(object->text, data, size);
+	object->text[size] = '\0';
+}
+
+//種類ごとの内容（IDと種類の後ろに続く引数列）をオブジェクトへ反映する。
+//args[first]から末尾までを使う。形が合わなければ0を返す（その場合オブジェクトは変更しない）。
+static int apply_object_args(struct server *server, struct display_object *object, struct proto_arg *args, int argc, int first) {
+	const uint8_t *geometry = NULL;
+	const uint8_t *color = NULL;
+	if (argc - first >= 2) {
+		geometry = args[first].data;
+		color = args[first + 1].data;
+	}
+	switch (object->type) {
+	case OBJECT_TYPE_RECT:
+		if (argc - first != 2 || args[first].size != 32 || args[first + 1].size != 4) {
+			return 0;
+		}
+		object->x = read_u64be(geometry);
+		object->y = read_u64be(geometry + 8);
+		object->width = read_u64be(geometry + 16);
+		object->height = read_u64be(geometry + 24);
+		apply_color(object, color);
+		return 1;
+	case OBJECT_TYPE_TRIANGLE:
+		if (argc - first != 2 || args[first].size != 48 || args[first + 1].size != 4) {
+			return 0;
+		}
+		object->x = read_u64be(geometry);
+		object->y = read_u64be(geometry + 8);
+		object->x2 = read_u64be(geometry + 16);
+		object->y2 = read_u64be(geometry + 24);
+		object->x3 = read_u64be(geometry + 32);
+		object->y3 = read_u64be(geometry + 40);
+		apply_color(object, color);
+		return 1;
+	case OBJECT_TYPE_LINE:
+		if (argc - first != 2 || args[first].size != 32 || args[first + 1].size != 4) {
+			return 0;
+		}
+		object->x = read_u64be(geometry);
+		object->y = read_u64be(geometry + 8);
+		object->x2 = read_u64be(geometry + 16);
+		object->y2 = read_u64be(geometry + 24);
+		apply_color(object, color);
+		return 1;
+	case OBJECT_TYPE_CIRCLE:
+		if (argc - first != 2 || args[first].size != 24 || args[first + 1].size != 4) {
+			return 0;
+		}
+		object->x = read_u64be(geometry);
+		object->y = read_u64be(geometry + 8);
+		object->radius = read_u64be(geometry + 16);
+		apply_color(object, color);
+		return 1;
+	case OBJECT_TYPE_TEXT:
+		//引数: 位置とサイズ(24バイト)、色(4バイト)、文字列(UTF-8)
+		if (argc - first != 3 || args[first].size != 24 || args[first + 1].size != 4) {
+			return 0;
+		}
+		if (!ensure_font(server)) {
+			return 0;
+		}
+		object->x = read_u64be(geometry);
+		object->y = read_u64be(geometry + 8);
+		object->size = read_u64be(geometry + 16);
+		apply_color(object, color);
+		set_object_text(object, args[first + 2].data, args[first + 2].size);
+		return 1;
+	default:
+		return 0;
+	}
 }
 
 static uint8_t handle_command(struct server *server, uint8_t command, struct proto_arg *args, int argc) {
@@ -482,33 +945,47 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 		render(server);
 		return STATUS_OK;
 	case COMMAND_CREATE_OBJECT: {
-		//引数1: ID(u64 BE)、引数2: 種類(u8)、
-		//引数3: X・Y・横幅・縦幅(各u64 BE)、引数4: 色(R・G・B・A)
-		if (argc != 4 || args[0].size != 8 || args[1].size != 1 || args[2].size != 32 || args[3].size != 4) {
+		//引数1: ID(u64 BE)、引数2: 種類(u8)、引数3以降: 種類ごとの内容
+		if (argc < 2 || args[0].size != 8 || args[1].size != 1) {
 			fprintf(stderr, "rtv-display: create object: bad args\n");
 			return STATUS_ERROR;
 		}
 		uint8_t type = args[1].data[0];
-		if (type != OBJECT_TYPE_RECT) {
+		if (type != OBJECT_TYPE_RECT && type != OBJECT_TYPE_TRIANGLE && type != OBJECT_TYPE_LINE && type != OBJECT_TYPE_CIRCLE && type != OBJECT_TYPE_TEXT) {
 			fprintf(stderr, "rtv-display: create object: unknown type 0x%02X\n", type);
 			return STATUS_ERROR;
 		}
 		uint64_t id = read_u64be(args[0].data);
 		struct display_object *object = find_object(server, id);
+		int is_new = 0;
 		if (object == NULL) {
 			object = calloc(1, sizeof(*object));
 			object->id = id;
+			is_new = 1;
+		}
+		uint8_t old_type = object->type;
+		object->type = type;
+		if (!apply_object_args(server, object, args, argc, 2)) {
+			fprintf(stderr, "rtv-display: create object: bad args for type 0x%02X\n", type);
+			object->type = old_type;
+			if (is_new) {
+				free(object);
+			}
+			return STATUS_ERROR;
+		}
+		if (type != OBJECT_TYPE_TEXT) {
+			set_object_text(object, NULL, 0);
+		}
+		if (is_new) {
 			//作った順に手前へ描くので末尾へ足す
 			wl_list_insert(server->objects.prev, &object->link);
 		}
-		object->type = type;
-		apply_geometry_color(object, args[2].data, args[3].data);
 		render(server);
 		return STATUS_OK;
 	}
 	case COMMAND_UPDATE_OBJECT: {
-		//引数1: ID(u64 BE)、引数2: X・Y・横幅・縦幅、引数3: 色
-		if (argc != 3 || args[0].size != 8 || args[1].size != 32 || args[2].size != 4) {
+		//引数1: ID(u64 BE)、引数2以降: 種類ごとの内容（作成と同じ並び）
+		if (argc < 1 || args[0].size != 8) {
 			fprintf(stderr, "rtv-display: update object: bad args\n");
 			return STATUS_ERROR;
 		}
@@ -517,7 +994,10 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			fprintf(stderr, "rtv-display: update object: no such id\n");
 			return STATUS_ERROR;
 		}
-		apply_geometry_color(object, args[1].data, args[2].data);
+		if (!apply_object_args(server, object, args, argc, 1)) {
+			fprintf(stderr, "rtv-display: update object: bad args\n");
+			return STATUS_ERROR;
+		}
 		render(server);
 		return STATUS_OK;
 	}
@@ -533,6 +1013,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			return STATUS_ERROR;
 		}
 		wl_list_remove(&object->link);
+		free(object->text);
 		free(object);
 		render(server);
 		return STATUS_OK;
@@ -547,6 +1028,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 		struct display_object *tmp;
 		wl_list_for_each_safe(object, tmp, &server->objects, link) {
 			wl_list_remove(&object->link);
+			free(object->text);
 			free(object);
 		}
 		render(server);

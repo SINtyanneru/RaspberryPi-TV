@@ -1,0 +1,58 @@
+package jp.rumi_room.raspberrypi_tv.Type;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
+//直線オブジェクト（種別0x03）。太さ1ピクセルで引く。
+//引数3: 始点と終点のX/Y（各u64、ビッグエンディアン）
+//引数4: 色（R・G・B・A、各u8）
+public class DisplayLine extends DisplayObject {
+	private long x1;
+	private long y1;
+	private long x2;
+	private long y2;
+	private int r;
+	private int g;
+	private int b;
+	private int a;
+
+	public DisplayLine(long x1, long y1, long x2, long y2, int r, int g, int b, int a) {
+		super(Type.LINE);
+		this.x1 = x1;
+		this.y1 = y1;
+		this.x2 = x2;
+		this.y2 = y2;
+		this.r = r;
+		this.g = g;
+		this.b = b;
+		this.a = a;
+	}
+
+	//始点と終点をまとめて変える（書き換えコマンド用）。
+	public void set_points(long x1, long y1, long x2, long y2) {
+		this.x1 = x1;
+		this.y1 = y1;
+		this.x2 = x2;
+		this.y2 = y2;
+	}
+
+	//色をまとめて変える（書き換えコマンド用）。
+	public void set_color(int r, int g, int b, int a) {
+		this.r = r;
+		this.g = g;
+		this.b = b;
+		this.a = a;
+	}
+
+	@Override
+	public byte[][] build_args() {
+		ByteBuffer points = ByteBuffer.allocate(32);
+		points.order(ByteOrder.BIG_ENDIAN);
+		points.putLong(this.x1);
+		points.putLong(this.y1);
+		points.putLong(this.x2);
+		points.putLong(this.y2);
+		byte[] color = new byte[]{(byte) this.r, (byte) this.g, (byte) this.b, (byte) this.a};
+		return new byte[][]{points.array(), color};
+	}
+}
