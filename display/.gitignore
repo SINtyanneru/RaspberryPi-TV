@@ -1,0 +1,6 @@
+gen/
+rtv-display
+rtv-test-client
+frame.ppm
+frame.png
+*.log
