@@ -29,7 +29,7 @@
 #include "backend.h"
 #include "xdg-shell-protocol.h"
 
-#define BACKGROUND_COLOR 0xFF20242A
+#define BACKGROUND_COLOR 0xFFFFFFFF
 #define WINDOW_WIDTH_FRACTION 2
 #define WINDOW_HEIGHT_FRACTION 2
 

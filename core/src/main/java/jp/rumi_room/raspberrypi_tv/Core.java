@@ -104,7 +104,7 @@ public class Core {
 		topmenu_cursor = Main.display.create_object(new DisplayRect(0, 0, 0, 0, 0x30, 0x90, 0xFF, 0x80));
 
 		for (TopMenuCategory category : topmenu_category) {
-			topmenu_category_text_list.add(Main.display.create_object(new DisplayText(0, bar_y, TOPMENU_CATEGORY_TEXT_SIZE, category.name(), 0xFF, 0xFF, 0xFF, 0xFF)));
+			topmenu_category_text_list.add(Main.display.create_object(new DisplayText(0, bar_y, TOPMENU_CATEGORY_TEXT_SIZE, category.name(), 0x00, 0x00, 0x00, 0xFF)));
 			List<DisplayText> items = new ArrayList<>();
 			for (TopMenuItem item : category.item_list()) {
 				//アイテムは最初は透明（alpha 0 = display側で描画自体スキップされる）
@@ -161,7 +161,6 @@ public class Core {
 		long center_x = Main.display.get_width() / 2;
 		long bar_y = Main.display.get_height() / 3;
 		long item_anchor_y = bar_y + 150;	//選択中アイテムの固定位置
-		long item_left = center_x - 120;
 
 		//カテゴリを横に並べる（選択中が中央に来る）
 		for (int i = 0; i < topmenu_category_text_list.size(); i++) {
@@ -170,9 +169,9 @@ public class Core {
 			long x = slot_x - text_width(topmenu_category.get(i).name(), TOPMENU_CATEGORY_TEXT_SIZE) / 2;
 			text.set_geometry(x, bar_y, TOPMENU_CATEGORY_TEXT_SIZE);
 			if (i == topmenu_select_col) {
-				text.set_color(0xFF, 0xFF, 0xFF, 0xFF);
+				text.set_color(0x00, 0x00, 0x00, 0xFF);
 			} else {
-				text.set_color(0xFF, 0xFF, 0xFF, 0x70);
+				text.set_color(0x00, 0x00, 0x00, 0x70);
 			}
 			text.update();
 		}
@@ -183,7 +182,8 @@ public class Core {
 		for (int j = 0; j < item_texts.size(); j++) {
 			DisplayText text = item_texts.get(j);
 			long y = item_anchor_y + (long) ((j - topmenu_disp_row) * TOPMENU_ITEM_PITCH);
-			text.set_geometry(item_left, y, TOPMENU_ITEM_TEXT_SIZE);
+			long x = center_x - text_width(items.get(j).name(), TOPMENU_ITEM_TEXT_SIZE) / 2;
+			text.set_geometry(x, y, TOPMENU_ITEM_TEXT_SIZE);
 			int alpha;
 			if (j == topmenu_select_row) {
 				alpha = 0xFF;
@@ -200,14 +200,14 @@ public class Core {
 					alpha = alpha * (int) (y - fade_top) / (int) (fade_bottom - fade_top);
 				}
 			}
-			text.set_color(0xFF, 0xFF, 0xFF, alpha);
+			text.set_color(0x00, 0x00, 0x00, alpha);
 			text.update();
 		}
 
 		//カーソルはアンカー位置に固定（リストの方が動く）
 		if (items.size() > 0) {
 			long cursor_width = text_width(items.get(topmenu_select_row).name(), TOPMENU_ITEM_TEXT_SIZE) + 32;
-			topmenu_cursor.set_geometry(item_left - 16, item_anchor_y - 8, cursor_width, TOPMENU_ITEM_TEXT_SIZE + 16);
+			topmenu_cursor.set_geometry(center_x - cursor_width / 2, item_anchor_y - 8, cursor_width, TOPMENU_ITEM_TEXT_SIZE + 16);
 			topmenu_cursor.set_color(0x30, 0x90, 0xFF, 0x80);
 		} else {
 			topmenu_cursor.set_color(0x30, 0x90, 0xFF, 0);
