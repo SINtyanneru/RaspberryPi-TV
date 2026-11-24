@@ -43,6 +43,7 @@
 #define COMMAND_UPDATE_OBJECT 0x02
 #define COMMAND_DELETE_OBJECT 0x03
 #define COMMAND_DELETE_ALL_OBJECTS 0x04
+#define COMMAND_GET_SIZE 0x05
 #define OBJECT_TYPE_RECT 0x01
 #define OBJECT_TYPE_TRIANGLE 0x02
 #define OBJECT_TYPE_LINE 0x03
@@ -902,6 +903,13 @@ static uint64_t read_u64be(const uint8_t *data) {
 	return value;
 }
 
+static void write_u32be(uint8_t *data, uint32_t value) {
+	for (int i = 3; i >= 0; i--) {
+		data[i] = value & 0xFF;
+		value >>= 8;
+	}
+}
+
 static struct display_object *find_object(struct server *server, uint64_t id) {
 	struct display_object *object;
 	wl_list_for_each(object, &server->objects, link) {
@@ -1233,7 +1241,10 @@ static int apply_object_args(struct server *server, struct display_object *objec
 	}
 }
 
-static uint8_t handle_command(struct server *server, uint8_t command, struct proto_arg *args, int argc) {
+//コマンドを処理する。データを返すコマンドは payload に続きのバイト列を入れ、
+//payload_length にその長さを返す（呼び出し側がステータスの後に送る）。
+static uint8_t handle_command(struct server *server, uint8_t command, struct proto_arg *args, int argc, uint8_t *payload, size_t *payload_length) {
+	*payload_length = 0;
 	switch (command) {
 	case COMMAND_INIT:
 		//初期化: ここでバックエンドを作り、画面が出る/切り替わる
@@ -1352,6 +1363,18 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 		render(server);
 		return STATUS_OK;
 	}
+	case COMMAND_GET_SIZE: {
+		//引数なし。応答はステータスの後に幅(u32 BE)、高さ(u32 BE)。
+		//初期化前（バックエンドがまだ無い）ならエラー。
+		if (argc != 0 || server->backend == NULL) {
+			fprintf(stderr, "rtv-display: get size: not initialized\n");
+			return STATUS_ERROR;
+		}
+		write_u32be(payload, (uint32_t)server->backend->width);
+		write_u32be(payload + 4, (uint32_t)server->backend->height);
+		*payload_length = 8;
+		return STATUS_OK;
+	}
 	default:
 		fprintf(stderr, "rtv-display: unknown command 0x%02X\n", command);
 		return STATUS_ERROR;
@@ -1410,9 +1433,13 @@ static int stdin_callback(int fd, uint32_t mask, void *data) {
 		if (consumed == 0) {
 			break;
 		}
-		uint8_t status = handle_command(server, command, args, argc);
-		uint8_t response = status;
-		if (write(STDOUT_FILENO, &response, 1) < 0) {
+		uint8_t payload[8];
+		size_t payload_length = 0;
+		uint8_t status = handle_command(server, command, args, argc, payload, &payload_length);
+		uint8_t response[1 + 8];
+		response[0] = status;
+		memcpy(response + 1, payload, payload_length);
+		if (write(STDOUT_FILENO, response, 1 + payload_length) < 0) {
 			fprintf(stderr, "rtv-display: failed to write response\n");
 		}
 		memmove(server->in_buffer, server->in_buffer + consumed, server->in_length - consumed);

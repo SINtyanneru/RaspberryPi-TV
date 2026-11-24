@@ -25,6 +25,8 @@ public class Display {
 	private static final byte COMMAND_DELETE_OBJECT = 0x03;
 	//オブジェクト全削除コマンド。
 	private static final byte COMMAND_DELETE_ALL_OBJECTS = 0x04;
+	//画面サイズ取得コマンド。応答はステータスの後に幅と高さ（各u32、ビッグエンディアン）が続く。
+	private static final byte COMMAND_GET_SIZE = 0x05;
 	private static final int STATUS_OK = 0x20;
 
 	private final String[] command_line;
@@ -135,6 +137,31 @@ public class Display {
 			object.set_display(null);
 		}
 		this.objects.clear();
+	}
+
+	//画面の幅（ピクセル）を返す。初期化コマンドを送る前は例外になる。
+	public int get_width() throws IOException {
+		return this.query_size()[0];
+	}
+
+	//画面の高さ（ピクセル）を返す。初期化コマンドを送る前は例外になる。
+	public int get_height() throws IOException {
+		return this.query_size()[1];
+	}
+
+	//画面サイズ取得コマンドを送り、{幅, 高さ}を返す。
+	private int[] query_size() throws IOException {
+		int status = this.send_command(COMMAND_GET_SIZE);
+		if (status != STATUS_OK) {
+			throw new IOException("display get size failed: status=0x" + Integer.toHexString(status));
+		}
+		byte[] data = this.in.readNBytes(8);
+		if (data.length < 8) {
+			throw new IOException("display process closed the connection");
+		}
+		ByteBuffer buffer = ByteBuffer.wrap(data);
+		buffer.order(ByteOrder.BIG_ENDIAN);
+		return new int[]{buffer.getInt(), buffer.getInt()};
 	}
 
 	//IDをu64ビッグエンディアンのバイト列にする。
