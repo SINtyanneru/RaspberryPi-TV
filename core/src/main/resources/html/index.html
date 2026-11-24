@@ -49,7 +49,7 @@
 			ws.onopen = function() {
 				ping_interval = setInterval(() => {
 					ws.send(new Uint8Array([0x00, 0x00]));
-				}, 1000);
+				}, 5000);
 			};
 
 			ws.onmessage = function(e) {
