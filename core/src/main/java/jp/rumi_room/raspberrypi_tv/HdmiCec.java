@@ -54,6 +54,12 @@ public class HdmiCec {
 	public static final int KEY_PLAY = 0x44;
 	public static final int KEY_STOP = 0x45;
 	public static final int KEY_PAUSE = 0x46;
+	public static final int KEY_REWIND = 0x48;
+	public static final int KEY_FAST_FORWARD = 0x49;
+	public static final int KEY_FORWARD = 0x4B;
+	public static final int KEY_BACKWARD = 0x4C;
+	public static final int KEY_BLUE = 0x71;
+	public static final int KEY_RED = 0x72;
 
 	private final String[] command_line;
 	private Process process;

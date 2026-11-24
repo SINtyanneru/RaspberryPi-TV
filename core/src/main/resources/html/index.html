@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<HTML>
+	<HEAD>
+		<TITLE>RaspberryPi TV</TITLE>
+	</HEAD>
+	<BODY>
+		<H1>RaspberryPi TV</H1>
+		<TABLE>
+			<TR>
+				<TD><BUTTON onclick="send_keycode(0x40)">電源</BUTTON></TD>
+			</TR>
+			<TR>
+				<TD COLSPAN="2"></TD>
+				<TD><BUTTON STYLE="width: 100%;" onclick="send_keycode(0x01)">↑</BUTTON></TD>
+			</TR>
+			<TR>
+				<TD></TD>
+				<TD><BUTTON onclick="send_keycode(0x03)">←</BUTTON></TD>
+				<TD><BUTTON onclick="send_keycode(0x00)">O</BUTTON></TD>
+				<TD><BUTTON onclick="send_keycode(0x04)">→</BUTTON></TD>
+			</TR>
+			<TR>
+				<TD COLSPAN="2"></TD>
+				<TD><BUTTON STYLE="width: 100%;" onclick="send_keycode(0x02)">↓</BUTTON></TD>
+			</TR>
+			<TR>
+				<TD COLSPAN="2"><BUTTON onclick="send_keycode(0x71)">戻る</BUTTON></TD>
+				<TD></TD>
+				<TD COLSPAN="2"><BUTTON onclick="send_keycode(0x72)">メニュー</BUTTON></TD>
+			</TR>
+		</TABLE>
+	</BODY>
+	<SCRIPT>
+		let ws;
+		let ping_interval = 0;
+		let mel = {
+		};
+
+		window.addEventListener("load", async function() {
+			connect();
+		});
+
+		function connect() {
+			console.log("再接続中...");
+
+			ws = new WebSocket(`ws://${window.location.host}/ws`);
+			ws.binaryType = "arraybuffer";
+
+			ws.onopen = function() {
+				ping_interval = setInterval(() => {
+					ws.send(new Uint8Array([0x00, 0x00]));
+				}, 1000);
+			};
+
+			ws.onmessage = function(e) {
+				if (e.data instanceof ArrayBuffer) {
+					console.log("バイナリ受信:", new Uint8Array(e.data));
+				} else {
+					console.log("テキスト受信:", e.data);
+				}
+			};
+
+			ws.onclose = function() {
+				clearInterval(ping_interval);
+				connect();
+			}
+
+			ws.onerror = function() {
+				clearInterval(ping_interval);
+				connect();
+			}
+		}
+
+		function send_keycode(keycode) {
+			ws.send(new Uint8Array([0x01, keycode]));
+		}
+	</SCRIPT>
+</HTML>
