@@ -70,14 +70,15 @@ struct proto_arg {
 struct display_object {
 	uint64_t id;
 	uint8_t type;
-	uint64_t x;
-	uint64_t y;
+	//座標は符号付き。画面外へはみ出す位置（負の座標）も扱うため
+	int64_t x;
+	int64_t y;
 	uint64_t width;
 	uint64_t height;
-	uint64_t x2;
-	uint64_t y2;
-	uint64_t x3;
-	uint64_t y3;
+	int64_t x2;
+	int64_t y2;
+	int64_t x3;
+	int64_t y3;
 	uint64_t radius;
 	uint64_t size;
 	char *text;
@@ -159,11 +160,14 @@ static uint32_t now_msec(void) {
 //--- 合成 -----------------------------------------------------------------
 
 //座標計算用にu64をint64へ飽和させる（画面より遥かに大きい値は丸めてよい）
-static int64_t sat_coord(uint64_t value) {
+static int64_t sat_coord(int64_t value) {
 	if (value > (1 << 24)) {
 		return 1 << 24;
 	}
-	return (int64_t)value;
+	if (value < -(1 << 24)) {
+		return -(1 << 24);
+	}
+	return value;
 }
 
 static uint64_t isqrt_u64(uint64_t value) {
@@ -196,22 +200,31 @@ static void blend_pixel(struct server *server, int64_t x, int64_t y, uint8_t r, 
 
 static void draw_rect(struct server *server, struct display_object *object) {
 	struct backend *backend = server->backend;
-	int width = backend->width;
-	int height = backend->height;
-	if (object->x >= (uint64_t)width || object->y >= (uint64_t)height) {
+	int64_t width = backend->width;
+	int64_t height = backend->height;
+	int64_t x0 = sat_coord(object->x);
+	int64_t y0 = sat_coord(object->y);
+	int64_t x1 = x0 + sat_coord((int64_t)object->width);
+	int64_t y1 = y0 + sat_coord((int64_t)object->height);
+	//画面と重なる部分だけに切り取る（負の座標で左・上にはみ出していても描く）
+	if (x1 <= 0 || y1 <= 0 || x0 >= width || y0 >= height) {
 		return;
 	}
-	uint64_t x1 = object->x + object->width;
-	if (x1 > (uint64_t)width || x1 < object->x) {
-		x1 = (uint64_t)width;
+	if (x0 < 0) {
+		x0 = 0;
 	}
-	uint64_t y1 = object->y + object->height;
-	if (y1 > (uint64_t)height || y1 < object->y) {
-		y1 = (uint64_t)height;
+	if (y0 < 0) {
+		y0 = 0;
 	}
-	for (uint64_t y = object->y; y < y1; y++) {
-		for (uint64_t x = object->x; x < x1; x++) {
-			uint32_t *dst = &backend->pixels[y * (uint64_t)width + x];
+	if (x1 > width) {
+		x1 = width;
+	}
+	if (y1 > height) {
+		y1 = height;
+	}
+	for (int64_t y = y0; y < y1; y++) {
+		for (int64_t x = x0; x < x1; x++) {
+			uint32_t *dst = &backend->pixels[y * width + x];
 			if (object->a == 0xFF) {
 				*dst = 0xFF000000 | ((uint32_t)object->r << 16) | ((uint32_t)object->g << 8) | object->b;
 			} else {
@@ -516,27 +529,28 @@ static void draw_text(struct server *server, struct display_object *object) {
 
 static void draw_framebuffer(struct server *server, struct display_object *object) {
 	struct backend *backend = server->backend;
-	int width = backend->width;
-	int height = backend->height;
+	int64_t width = backend->width;
+	int64_t height = backend->height;
 	if (object->width == 0 || object->height == 0 || object->src_width == 0 || object->src_height == 0) {
 		return;
 	}
-	if (object->x >= (uint64_t)width || object->y >= (uint64_t)height) {
+	//原点は切り取らずに保持する（ソース座標の対応付けに使う）
+	int64_t x0 = sat_coord(object->x);
+	int64_t y0 = sat_coord(object->y);
+	int64_t x1 = x0 + sat_coord((int64_t)object->width);
+	int64_t y1 = y0 + sat_coord((int64_t)object->height);
+	if (x1 <= 0 || y1 <= 0 || x0 >= width || y0 >= height) {
 		return;
 	}
-	uint64_t x1 = object->x + object->width;
-	if (x1 > (uint64_t)width || x1 < object->x) {
-		x1 = (uint64_t)width;
-	}
-	uint64_t y1 = object->y + object->height;
-	if (y1 > (uint64_t)height || y1 < object->y) {
-		y1 = (uint64_t)height;
-	}
-	for (uint64_t y = object->y; y < y1; y++) {
+	int64_t cx0 = x0 < 0 ? 0 : x0;
+	int64_t cy0 = y0 < 0 ? 0 : y0;
+	int64_t cx1 = x1 > width ? width : x1;
+	int64_t cy1 = y1 > height ? height : y1;
+	for (int64_t y = cy0; y < cy1; y++) {
 		//表示サイズへリサイズ（最近傍）しながら描く
-		uint64_t sy = (y - object->y) * object->src_height / object->height;
-		for (uint64_t x = object->x; x < x1; x++) {
-			uint32_t *dst = &backend->pixels[y * (uint64_t)width + x];
+		uint64_t sy = (uint64_t)(y - y0) * object->src_height / object->height;
+		for (int64_t x = cx0; x < cx1; x++) {
+			uint32_t *dst = &backend->pixels[y * width + x];
 			if (object->plane != NULL) {
 				//映像はハードウェアプレーン側にある。ここは透明にして透かす。
 				*dst = 0;
@@ -547,7 +561,7 @@ static void draw_framebuffer(struct server *server, struct display_object *objec
 				*dst = 0xFF000000;
 				continue;
 			}
-			uint64_t sx = (x - object->x) * object->src_width / object->width;
+			uint64_t sx = (uint64_t)(x - x0) * object->src_width / object->width;
 			//BGRAのバイト並びはXRGB8888のワードと一致する
 			*dst = ((const uint32_t *)object->frame_front)[sy * object->src_width + sx] | 0xFF000000;
 		}
