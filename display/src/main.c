@@ -124,6 +124,8 @@ struct server {
 	//プロトコル受信バッファ
 	uint8_t in_buffer[IN_BUFFER_SIZE];
 	size_t in_length;
+	//再描画の予約（タイマー）。NULLでなければ予約済み
+	struct wl_event_source *render_timer_source;
 #ifdef HAVE_TEXT
 	//テキスト描画用フォント（UDEV Gothic）。初回利用時に読み込む。
 	FT_Library ft_library;
@@ -662,6 +664,37 @@ static void render(struct server *server) {
 	backend->present(backend);
 }
 
+static int render_timer_callback(void *data) {
+	struct server *server = data;
+	struct wl_event_source *source = server->render_timer_source;
+	server->render_timer_source = NULL;
+	if (source != NULL) {
+		wl_event_source_remove(source);
+	}
+	render(server);
+	return 0;
+}
+
+//再描画を予約する。コマンドが連続して届いても最大で約60fpsに
+//間引いて描く（1コマンドごとの全画面再描画を避ける）。
+//応答は予約せずに即座に返すので、クライアントは待たされない。
+static void schedule_render(struct server *server) {
+	if (server->backend == NULL) {
+		//初期化前は描く画面が無い
+		return;
+	}
+	if (server->render_timer_source != NULL) {
+		return;
+	}
+	struct wl_event_loop *loop = wl_display_get_event_loop(server->display);
+	server->render_timer_source = wl_event_loop_add_timer(loop, render_timer_callback, server);
+	if (server->render_timer_source == NULL) {
+		render(server);
+		return;
+	}
+	wl_event_source_timer_update(server->render_timer_source, 16);
+}
+
 static void send_frame_callbacks(struct surface *surface) {
 	uint32_t time = now_msec();
 	struct wl_resource *callback;
@@ -710,7 +743,7 @@ static void surface_handle_commit(struct wl_client *client, struct wl_resource *
 		surface->pending_buffer = NULL;
 		surface->has_pending_buffer = 0;
 	}
-	render(surface->server);
+	schedule_render(surface->server);
 	send_frame_callbacks(surface);
 }
 
@@ -1020,10 +1053,10 @@ static int framebuffer_client_callback(int fd, uint32_t mask, void *data) {
 						fprintf(stderr, "rtv-display: framebuffer %llu: plane flip failed; falling back to software rendering\n", (unsigned long long)object->id);
 						backend_destroy_plane(object->server->backend, object->plane);
 						object->plane = NULL;
-						render(object->server);
+						schedule_render(object->server);
 					}
 				} else {
-					render(object->server);
+					schedule_render(object->server);
 				}
 			}
 			continue;
@@ -1276,7 +1309,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 				framebuffer_setup(server, object);
 			}
 		}
-		render(server);
+		schedule_render(server);
 		return STATUS_OK;
 	case COMMAND_CREATE_OBJECT: {
 		//引数1: ID(u64 BE)、引数2: 種類(u8)、引数3以降: 種類ごとの内容
@@ -1321,7 +1354,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			//作った順に手前へ描くので末尾へ足す
 			wl_list_insert(server->objects.prev, &object->link);
 		}
-		render(server);
+		schedule_render(server);
 		return STATUS_OK;
 	}
 	case COMMAND_UPDATE_OBJECT: {
@@ -1339,7 +1372,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			fprintf(stderr, "rtv-display: update object: bad args\n");
 			return STATUS_ERROR;
 		}
-		render(server);
+		schedule_render(server);
 		return STATUS_OK;
 	}
 	case COMMAND_DELETE_OBJECT: {
@@ -1357,7 +1390,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 		framebuffer_close(object);
 		free(object->text);
 		free(object);
-		render(server);
+		schedule_render(server);
 		return STATUS_OK;
 	}
 	case COMMAND_DELETE_ALL_OBJECTS: {
@@ -1374,7 +1407,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			free(object->text);
 			free(object);
 		}
-		render(server);
+		schedule_render(server);
 		return STATUS_OK;
 	}
 	case COMMAND_GET_SIZE: {
