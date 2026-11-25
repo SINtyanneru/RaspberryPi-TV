@@ -269,6 +269,8 @@ struct backend_plane {
 	int height;
 	uint32_t current_fb;
 	uint64_t zpos_value;
+	uint64_t zpos_min;
+	uint64_t zpos_max;
 	uint32_t prop_fb_id;
 	uint32_t prop_crtc_id;
 	uint32_t prop_src_x;
@@ -480,6 +482,8 @@ struct backend_plane *backend_create_plane(struct backend *backend, uint32_t wid
 	plane->src_width = width;
 	plane->src_height = height;
 	plane->zpos_value = data->primary_zpos - 1;
+	plane->zpos_min = zmin;
+	plane->zpos_max = zmax;
 	plane->prop_zpos = zpos_id;
 	plane->prop_fb_id = find_property(data->fd, plane_id, DRM_MODE_OBJECT_PLANE, "FB_ID", NULL, NULL, NULL, NULL);
 	plane->prop_crtc_id = find_property(data->fd, plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_ID", NULL, NULL, NULL, NULL);
@@ -520,6 +524,29 @@ int backend_plane_set_geometry(struct backend *backend, struct backend_plane *pl
 	plane->y = y;
 	plane->width = width;
 	plane->height = height;
+	if (plane->current_fb != 0) {
+		return plane_commit(plane, plane->current_fb);
+	}
+	return 0;
+}
+
+int backend_plane_set_layer(struct backend *backend, struct backend_plane *plane, int layer) {
+	(void)backend;
+	if (layer < 0) {
+		return -1;
+	}
+	struct drm_data *data = plane->data;
+	if (data->primary_zpos == 0) {
+		return -1;
+	}
+	uint64_t value = (uint64_t)data->primary_zpos - 1 - (uint64_t)layer;
+	if (value < plane->zpos_min || value > plane->zpos_max) {
+		return -1;
+	}
+	if (value == plane->zpos_value) {
+		return 0;
+	}
+	plane->zpos_value = value;
 	if (plane->current_fb != 0) {
 		return plane_commit(plane, plane->current_fb);
 	}
@@ -581,6 +608,13 @@ int backend_plane_set_geometry(struct backend *backend, struct backend_plane *pl
 	(void)y;
 	(void)width;
 	(void)height;
+	return -1;
+}
+
+int backend_plane_set_layer(struct backend *backend, struct backend_plane *plane, int layer) {
+	(void)backend;
+	(void)plane;
+	(void)layer;
 	return -1;
 }
 

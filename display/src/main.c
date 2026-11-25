@@ -70,6 +70,9 @@ struct proto_arg {
 struct display_object {
 	uint64_t id;
 	uint8_t type;
+	//重なり順。大きいほど手前に描く。同点なら作成順（seqの小さい順）。
+	int64_t z;
+	uint64_t seq;
 	//座標は符号付き。画面外へはみ出す位置（負の座標）も扱うため
 	int64_t x;
 	int64_t y;
@@ -97,6 +100,7 @@ struct display_object {
 	int has_frame;
 	//フレームバッファー用: ハードウェアプレーン（使える場合だけ）
 	struct backend_plane *plane;
+	int plane_layer;
 	uint8_t *plane_pixels[2];
 	uint32_t plane_stride;
 	int plane_next;
@@ -114,6 +118,7 @@ struct server {
 	struct backend *backend;
 	struct wl_list surfaces;
 	struct wl_list objects;
+	uint64_t next_seq;
 	uint32_t configure_serial;
 	//バックエンド設定（生成は初期化コマンドまで遅延する）
 	const char *backend_name;
@@ -598,6 +603,19 @@ static void draw_object(struct server *server, struct display_object *object) {
 	}
 }
 
+//描画順の比較: zの小さい順、同点なら作成順（seqの小さい順）。
+static int compare_objects(const void *a, const void *b) {
+	struct display_object *object_a = *(struct display_object *const *)a;
+	struct display_object *object_b = *(struct display_object *const *)b;
+	if (object_a->z != object_b->z) {
+		return object_a->z < object_b->z ? -1 : 1;
+	}
+	if (object_a->seq != object_b->seq) {
+		return object_a->seq < object_b->seq ? -1 : 1;
+	}
+	return 0;
+}
+
 static void render(struct server *server) {
 	if (server->backend == NULL) {
 		//初期化コマンド前は画面が無い
@@ -656,10 +674,30 @@ static void render(struct server *server) {
 		}
 		wl_shm_buffer_end_access(shm);
 	}
-	//オブジェクト（UI）はサーフェスの上に描く
+	//オブジェクト（UI）はサーフェスの上に、zの小さい順（同点は作成順）に描く
+	int object_count = 0;
 	struct display_object *object;
 	wl_list_for_each(object, &server->objects, link) {
-		draw_object(server, object);
+		object_count++;
+	}
+	if (object_count > 0) {
+		struct display_object **order = malloc(sizeof(*order) * (size_t)object_count);
+		if (order != NULL) {
+			int i = 0;
+			wl_list_for_each(object, &server->objects, link) {
+				order[i] = object;
+				i++;
+			}
+			qsort(order, (size_t)object_count, sizeof(*order), compare_objects);
+			for (i = 0; i < object_count; i++) {
+				draw_object(server, order[i]);
+			}
+			free(order);
+		} else {
+			wl_list_for_each(object, &server->objects, link) {
+				draw_object(server, object);
+			}
+		}
 	}
 	backend->present(backend);
 }
@@ -982,6 +1020,7 @@ static void framebuffer_close(struct display_object *object) {
 		}
 		object->plane = NULL;
 	}
+	object->plane_layer = -1;
 	if (object->client_source != NULL) {
 		wl_event_source_remove(object->client_source);
 		object->client_source = NULL;
@@ -1053,6 +1092,7 @@ static int framebuffer_client_callback(int fd, uint32_t mask, void *data) {
 						fprintf(stderr, "rtv-display: framebuffer %llu: plane flip failed; falling back to software rendering\n", (unsigned long long)object->id);
 						backend_destroy_plane(object->server->backend, object->plane);
 						object->plane = NULL;
+						object->plane_layer = -1;
 						schedule_render(object->server);
 					}
 				} else {
@@ -1174,6 +1214,90 @@ static int framebuffer_setup(struct server *server, struct display_object *objec
 		}
 	}
 	return 1;
+}
+
+//フレームバッファーのハードウェアプレーンの重なり順を、オブジェクトの
+//z（同点は作成順）に合わせる。プレーンはプライマリ（ソフトウェア描画の
+//面）より下にしか置けないため、ソフトウェア描画のフレームバッファーより
+//上に来るプレーンは順序が逆転してしまう。その場合はプレーンを手放して
+//ソフトウェア描画に落とす。
+static void refresh_framebuffer_layers(struct server *server) {
+	if (server->backend == NULL) {
+		return;
+	}
+	//ソフトウェア描画になっているフレームバッファーのうち最も下のもの
+	int have_software = 0;
+	int64_t software_z = 0;
+	uint64_t software_seq = 0;
+	struct display_object *object;
+	wl_list_for_each(object, &server->objects, link) {
+		if (object->type != OBJECT_TYPE_FRAMEBUFFER || object->plane != NULL || object->listen_fd < 0) {
+			continue;
+		}
+		if (!have_software || object->z < software_z ||
+			(object->z == software_z && object->seq < software_seq)) {
+			have_software = 1;
+			software_z = object->z;
+			software_seq = object->seq;
+		}
+	}
+	if (have_software) {
+		wl_list_for_each(object, &server->objects, link) {
+			if (object->type != OBJECT_TYPE_FRAMEBUFFER || object->plane == NULL) {
+				continue;
+			}
+			if (object->z > software_z ||
+				(object->z == software_z && object->seq > software_seq)) {
+				fprintf(stderr, "rtv-display: framebuffer %llu: dropping hardware plane to keep z order (a framebuffer above it renders in software)\n",
+					(unsigned long long)object->id);
+				backend_destroy_plane(server->backend, object->plane);
+				object->plane = NULL;
+				object->plane_layer = -1;
+				schedule_render(server);
+			}
+		}
+	}
+	//残ったプレーンへ、上にある順に層（プライマリ直下が0）を割り当てる
+	int count = 0;
+	wl_list_for_each(object, &server->objects, link) {
+		if (object->type == OBJECT_TYPE_FRAMEBUFFER && object->plane != NULL) {
+			count++;
+		}
+	}
+	if (count == 0) {
+		return;
+	}
+	struct display_object **order = malloc(sizeof(*order) * (size_t)count);
+	if (order == NULL) {
+		return;
+	}
+	int i = 0;
+	wl_list_for_each(object, &server->objects, link) {
+		if (object->type == OBJECT_TYPE_FRAMEBUFFER && object->plane != NULL) {
+			order[i] = object;
+			i++;
+		}
+	}
+	qsort(order, (size_t)count, sizeof(*order), compare_objects);
+	for (i = 0; i < count; i++) {
+		//昇順の末尾が一番上。プライマリ直下を層0として数える
+		int layer = count - 1 - i;
+		struct display_object *target = order[i];
+		if (target->plane_layer == layer) {
+			continue;
+		}
+		if (backend_plane_set_layer(server->backend, target->plane, layer) != 0) {
+			fprintf(stderr, "rtv-display: framebuffer %llu: cannot set plane layer %d; falling back to software rendering\n",
+				(unsigned long long)target->id, layer);
+			backend_destroy_plane(server->backend, target->plane);
+			target->plane = NULL;
+			target->plane_layer = -1;
+			schedule_render(server);
+		} else {
+			target->plane_layer = layer;
+		}
+	}
+	free(order);
 }
 
 static void apply_color(struct display_object *object, const uint8_t *color) {
@@ -1309,11 +1433,12 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 				framebuffer_setup(server, object);
 			}
 		}
+		refresh_framebuffer_layers(server);
 		schedule_render(server);
 		return STATUS_OK;
 	case COMMAND_CREATE_OBJECT: {
-		//引数1: ID(u64 BE)、引数2: 種類(u8)、引数3以降: 種類ごとの内容
-		if (argc < 2 || args[0].size != 8 || args[1].size != 1) {
+		//引数1: ID(u64 BE)、引数2: 種類(u8)、引数3: Z位置(i64 BE)、引数4以降: 種類ごとの内容
+		if (argc < 3 || args[0].size != 8 || args[1].size != 1 || args[2].size != 8) {
 			fprintf(stderr, "rtv-display: create object: bad args\n");
 			return STATUS_ERROR;
 		}
@@ -1323,6 +1448,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			return STATUS_ERROR;
 		}
 		uint64_t id = read_u64be(args[0].data);
+		int64_t z = (int64_t)read_u64be(args[2].data);
 		struct display_object *object = find_object(server, id);
 		int is_new = 0;
 		if (object == NULL) {
@@ -1331,11 +1457,14 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			object->server = server;
 			object->listen_fd = -1;
 			object->client_fd = -1;
+			object->plane_layer = -1;
+			object->seq = server->next_seq;
+			server->next_seq++;
 			is_new = 1;
 		}
 		uint8_t old_type = object->type;
 		object->type = type;
-		if (!apply_object_args(server, object, args, argc, 2)) {
+		if (!apply_object_args(server, object, args, argc, 3)) {
 			fprintf(stderr, "rtv-display: create object: bad args for type 0x%02X\n", type);
 			object->type = old_type;
 			if (is_new) {
@@ -1344,6 +1473,7 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			}
 			return STATUS_ERROR;
 		}
+		object->z = z;
 		if (type != OBJECT_TYPE_TEXT) {
 			set_object_text(object, NULL, 0);
 		}
@@ -1351,15 +1481,18 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			framebuffer_close(object);
 		}
 		if (is_new) {
-			//作った順に手前へ描くので末尾へ足す
+			//リストの並びは作成順のまま保つ（描画順はzで決める）
 			wl_list_insert(server->objects.prev, &object->link);
+		}
+		if (type == OBJECT_TYPE_FRAMEBUFFER || old_type == OBJECT_TYPE_FRAMEBUFFER) {
+			refresh_framebuffer_layers(server);
 		}
 		schedule_render(server);
 		return STATUS_OK;
 	}
 	case COMMAND_UPDATE_OBJECT: {
-		//引数1: ID(u64 BE)、引数2以降: 種類ごとの内容（作成と同じ並び）
-		if (argc < 1 || args[0].size != 8) {
+		//引数1: ID(u64 BE)、引数2: Z位置(i64 BE)、引数3以降: 種類ごとの内容（作成と同じ並び）
+		if (argc < 2 || args[0].size != 8 || args[1].size != 8) {
 			fprintf(stderr, "rtv-display: update object: bad args\n");
 			return STATUS_ERROR;
 		}
@@ -1368,9 +1501,14 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			fprintf(stderr, "rtv-display: update object: no such id\n");
 			return STATUS_ERROR;
 		}
-		if (!apply_object_args(server, object, args, argc, 1)) {
+		int64_t z = (int64_t)read_u64be(args[1].data);
+		if (!apply_object_args(server, object, args, argc, 2)) {
 			fprintf(stderr, "rtv-display: update object: bad args\n");
 			return STATUS_ERROR;
+		}
+		object->z = z;
+		if (object->type == OBJECT_TYPE_FRAMEBUFFER) {
+			refresh_framebuffer_layers(server);
 		}
 		schedule_render(server);
 		return STATUS_OK;
@@ -1386,10 +1524,14 @@ static uint8_t handle_command(struct server *server, uint8_t command, struct pro
 			fprintf(stderr, "rtv-display: delete object: no such id\n");
 			return STATUS_ERROR;
 		}
+		int was_framebuffer = object->type == OBJECT_TYPE_FRAMEBUFFER;
 		wl_list_remove(&object->link);
 		framebuffer_close(object);
 		free(object->text);
 		free(object);
+		if (was_framebuffer) {
+			refresh_framebuffer_layers(server);
+		}
 		schedule_render(server);
 		return STATUS_OK;
 	}

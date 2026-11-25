@@ -30,12 +30,15 @@ public abstract class DisplayObject {
 
 	private final Type type;
 	private long id;
+	//重なり順。大きいほど手前。既定は0。
+	private long z;
 	//作成したDisplay。未作成ならnull。
 	private Display display;
 
 	protected DisplayObject(Type type) {
 		this.type = type;
 		this.id = 0;
+		this.z = 0;
 		this.display = null;
 	}
 
@@ -49,6 +52,14 @@ public abstract class DisplayObject {
 
 	public void set_id(long id) {
 		this.id = id;
+	}
+
+	public long get_z() {
+		return this.z;
+	}
+
+	public void set_z(long z) {
+		this.z = z;
 	}
 
 	//Display.create_objectが呼ぶ。所属するDisplayを記録する。
@@ -76,6 +87,6 @@ public abstract class DisplayObject {
 		this.display.__delete_object(this);
 	}
 
-	//作成コマンドの引数のうち、IDと種類に続く分を作る。
+	//作成コマンドの引数のうち、ID・種類・Z位置に続く分を作る。
 	public abstract byte[][] build_args();
 }

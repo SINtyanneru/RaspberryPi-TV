@@ -70,17 +70,19 @@ public class Display {
 	//オブジェクトを作成し、そのオブジェクトを返す。IDはここで生成して割り当てる。
 	//引数1: ID（u64、ビッグエンディアン）
 	//引数2: 種類（u8）
-	//引数3以降: 種類ごとの内容（DisplayObject.build_args）
+	//引数3: Z位置（i64、ビッグエンディアン）
+	//引数4以降: 種類ごとの内容（DisplayObject.build_args）
 	public <T extends DisplayObject> T create_object(T object) throws IOException {
 		if (object.get_id() == 0) {
 			object.set_id(this.next_object_id);
 			this.next_object_id++;
 		}
 		byte[][] object_args = object.build_args();
-		byte[][] args = new byte[object_args.length + 2][];
+		byte[][] args = new byte[object_args.length + 3][];
 		args[0] = encode_id(object.get_id());
 		args[1] = new byte[]{object.get_type().get_code()};
-		System.arraycopy(object_args, 0, args, 2, object_args.length);
+		args[2] = encode_long(object.get_z());
+		System.arraycopy(object_args, 0, args, 3, object_args.length);
 		int status = this.send_command(COMMAND_CREATE_OBJECT, args);
 		if (status != STATUS_OK) {
 			throw new IOException("display create object failed: status=0x" + Integer.toHexString(status));
@@ -92,17 +94,18 @@ public class Display {
 		return object;
 	}
 
-	//オブジェクトを書き換える（位置・サイズ・色）。作り直さないので軽い。
+	//オブジェクトを書き換える（位置・サイズ・色・Z位置）。作り直さないので軽い。
 	//DisplayObject.update()からだけ呼ぶこと。
-	//引数1: ID、引数2以降: 種類ごとの内容（DisplayObject.build_args）
+	//引数1: ID、引数2: Z位置、引数3以降: 種類ごとの内容（DisplayObject.build_args）
 	public void __update_object(DisplayObject object) throws IOException {
 		if (object.get_id() == 0) {
 			throw new IOException("object is not created yet");
 		}
 		byte[][] object_args = object.build_args();
-		byte[][] args = new byte[object_args.length + 1][];
+		byte[][] args = new byte[object_args.length + 2][];
 		args[0] = encode_id(object.get_id());
-		System.arraycopy(object_args, 0, args, 1, object_args.length);
+		args[1] = encode_long(object.get_z());
+		System.arraycopy(object_args, 0, args, 2, object_args.length);
 		int status = this.send_command(COMMAND_UPDATE_OBJECT, args);
 		if (status != STATUS_OK) {
 			throw new IOException("display update object failed: status=0x" + Integer.toHexString(status));
@@ -166,9 +169,14 @@ public class Display {
 
 	//IDをu64ビッグエンディアンのバイト列にする。
 	private static byte[] encode_id(long id) {
+		return encode_long(id);
+	}
+
+	//longをi64ビッグエンディアンのバイト列にする。
+	private static byte[] encode_long(long value) {
 		ByteBuffer buffer = ByteBuffer.allocate(8);
 		buffer.order(ByteOrder.BIG_ENDIAN);
-		buffer.putLong(id);
+		buffer.putLong(value);
 		return buffer.array();
 	}
 

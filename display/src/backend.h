@@ -44,6 +44,9 @@ struct backend_plane;
 struct backend_plane *backend_create_plane(struct backend *backend, uint32_t width, uint32_t height, uint8_t *pixels_out[2], uint32_t *stride_out);
 //表示位置とサイズを設定する。
 int backend_plane_set_geometry(struct backend *backend, struct backend_plane *plane, int x, int y, int width, int height);
+//プレーンの重なり順を設定する。layer 0がプライマリの直下、
+//数字が大きいほど下になる。範囲内に入らなければ-1を返す。
+int backend_plane_set_layer(struct backend *backend, struct backend_plane *plane, int layer);
 //pixels_outのどちらかを表示する（フリップ）。
 int backend_plane_flip(struct backend *backend, struct backend_plane *plane, const uint8_t *pixels);
 void backend_destroy_plane(struct backend *backend, struct backend_plane *plane);
