@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import jp.rumi_room.raspberrypi_tv.Type.AppInfo;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayRect;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayText;
 import jp.rumi_room.raspberrypi_tv.Type.TopMenu.TopMenuCategory;
@@ -52,6 +53,8 @@ public class Core {
 	private static List<List<DisplayText>> topmenu_item_text_list = new ArrayList<>();
 	private static DisplayRect topmenu_cursor;
 
+	//APP
+	private static boolean runing_app = false;
 
 	public static void start() throws IOException {
 		//メニュー初期化
@@ -67,13 +70,25 @@ public class Core {
 		}}));
 		topmenu_category.add(new TopMenuCategory("APP", "アプリ", new ArrayList<>()));
 
-		topmenu_category.get(1).item_list().add(new TopMenuItem("POOP", "うんち", Optional.of(new Runnable() {
-				@Override
-				public void run() {
-					System.out.println("うんち");
-				}
-			})
-		));
+		for (AppInfo app : App.get_list()) {
+			topmenu_category.get(1).item_list().add(new TopMenuItem("APP-" + app.id(), app.name(), Optional.of(new Runnable() {
+					@Override
+					public void run() {
+						try {
+							hide_topmenu();
+						} catch (IOException ex) {
+						}
+
+						runing_app = true;
+
+						try {
+							App.run(app.id());
+						} catch (IOException ex) {
+						}
+					}
+				})
+			));
+		}
 
 		init_topmenu_objects();
 
@@ -85,7 +100,12 @@ public class Core {
 		}
 	}
 
-	static int value_clamp(int min, int value) {
+	public static void end_app() {
+		runing_app = false;
+		show_topmenu();
+	}
+
+	private static int value_clamp(int min, int value) {
 		if (value < min) {
 			return min;
 		}
@@ -95,6 +115,28 @@ public class Core {
 	private static void draw() throws IOException {
 		menu_draw();
 		draw_topmenu();
+	}
+
+	private static void show_topmenu() {
+		topmenu_now = true;
+		topmenu_dirty = true;
+	}
+
+	private static void hide_topmenu() throws IOException {
+		topmenu_now = false;
+		
+		for (DisplayText text : topmenu_category_text_list) {
+			text.set_color(0x00, 0x00, 0x00, 0x00);
+			text.update();
+		}
+		for (List<DisplayText> item_text_list : topmenu_item_text_list) {
+			for (DisplayText text : item_text_list) {
+				text.set_color(0x00, 0x00, 0x00, 0x00);
+				text.update();
+			}
+		}
+		topmenu_cursor.set_color(0x00, 0x00, 0x00, 0x00);
+		topmenu_cursor.update();
 	}
 
 	private static void init_topmenu_objects() throws IOException {
@@ -336,35 +378,35 @@ public class Core {
 			}
 
 			case HdmiCec.KEY_LEFT: {
-				if (topmenu_now && topmenu_select_col > 0) {
+				if ((topmenu_now && menu_open == false) && topmenu_select_col > 0) {
 					change_col(topmenu_select_col - 1);
 				}
 				return;
 			}
 
 			case HdmiCec.KEY_RIGHT: {
-				if (topmenu_now && topmenu_select_col + 1 < topmenu_category.size()) {
+				if ((topmenu_now && menu_open == false) && topmenu_select_col + 1 < topmenu_category.size()) {
 					change_col(topmenu_select_col + 1);
 				}
 				return;
 			}
 
 			case HdmiCec.KEY_UP: {
-				if (topmenu_now && topmenu_select_row > 0) {
+				if ((topmenu_now && menu_open == false) && topmenu_select_row > 0) {
 					change_row(topmenu_select_row - 1);
 				}
 				return;
 			}
 
 			case HdmiCec.KEY_DOWN: {
-				if (topmenu_now && topmenu_select_row + 1 < topmenu_category.get(topmenu_select_col).item_list().size()) {
+				if ((topmenu_now && menu_open == false) && topmenu_select_row + 1 < topmenu_category.get(topmenu_select_col).item_list().size()) {
 					change_row(topmenu_select_row + 1);
 				}
 				return;
 			}
 
 			case HdmiCec.KEY_SELECT: {
-				if (topmenu_now) {
+				if ((topmenu_now && menu_open == false)) {
 					List<TopMenuItem> items = topmenu_category.get(topmenu_select_col).item_list();
 					if (topmenu_select_row < items.size()) {
 						Optional<Runnable> action = items.get(topmenu_select_row).action();

@@ -117,6 +117,15 @@ public class Main {
 		logger = new RumiJavaLogger();
 		logger.print(SeverityLevel.Ok, "Initialized RumiJavaLogger");
 
+		//アプリ
+		try {
+			App.init();
+			logger.print(SeverityLevel.Ok, "Initialized APP");
+		} catch (Exception ex) {
+			ex.printStackTrace();
+			logger.print(SeverityLevel.Error, "APP Initialize Error.");
+		}
+
 		//HDMI-CEC
 		try {
 			hdmi_cec = new HdmiCec(HDMI_CEC_PATH);

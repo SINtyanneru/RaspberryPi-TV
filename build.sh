@@ -25,3 +25,6 @@ if command -v mvn >/dev/null 2>&1; then
 else
 	echo "core: mvn not found; skipping raspberrypi_tv jar"
 fi
+
+#アプリをビルド
+./app/build.sh
