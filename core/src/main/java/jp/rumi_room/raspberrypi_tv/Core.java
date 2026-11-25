@@ -27,6 +27,7 @@ public class Core {
 	private static final long MENU_PHASE1_MS = 250;
 	private static final long MENU_PHASE2_MS = 200;
 	private static final long MENU_INNER_MARGIN = 100;
+	private static final long MENU_Z = 20000;	//常に最前面に出すためのZ位置
 	private static DisplayRect menu_inner;
 	private static int menu_phase = 0;
 	private static long menu_inner_last_y = Long.MIN_VALUE;
@@ -40,6 +41,7 @@ public class Core {
 	private final static long TOPMENU_ITEM_TEXT_SIZE = 40;
 	private final static long TOPMENU_CATEGORY_PITCH = 280;	//カテゴリ同士の間隔
 	private final static long TOPMENU_ITEM_PITCH = 76;		//アイテム同士の間隔
+	private final static long TOPMENU_Z = 10000;	//常に最前面に出すためのZ位置（サイドメニューよりは下）
 	private static int topmenu_select_col = 0;
 	private static int topmenu_select_row = 0;
 	private static double topmenu_disp_col = 0;	//表示上の列位置（アニメーション用、小数）
@@ -59,8 +61,12 @@ public class Core {
 	public static void start() throws IOException {
 		//メニュー初期化
 		menu_width = value_clamp(500, Main.display.get_width() / 4);
-		menu_base = Main.display.create_object(new DisplayRect(menu_width * -1, 0, menu_width, Main.display.get_height(), 0xFF, 0xFF, 0xFF, 0xFF));
-		menu_inner = Main.display.create_object(new DisplayRect(0, Main.display.get_height() / 2, menu_width, 0, 0x30, 0x90, 0xFF, 0xB0));
+		DisplayRect base = new DisplayRect(menu_width * -1, 0, menu_width, Main.display.get_height(), 0xFF, 0xFF, 0xFF, 0xFF);
+		base.set_z(MENU_Z);
+		menu_base = Main.display.create_object(base);
+		DisplayRect inner = new DisplayRect(0, Main.display.get_height() / 2, menu_width, 0, 0x30, 0x90, 0xFF, 0xB0);
+		inner.set_z(MENU_Z);
+		menu_inner = Main.display.create_object(inner);
 
 		//トップメニュー初期化
 		topmenu_category.add(new TopMenuCategory("SETTING", "設定", new ArrayList<>(){{
@@ -143,14 +149,20 @@ public class Core {
 		long bar_y = Main.display.get_height() / 3;
 
 		//カーソルはアイテムのテキストより先に作って下に敷く
-		topmenu_cursor = Main.display.create_object(new DisplayRect(0, 0, 0, 0, 0x30, 0x90, 0xFF, 0x80));
+		DisplayRect cursor = new DisplayRect(0, 0, 0, 0, 0x30, 0x90, 0xFF, 0x80);
+		cursor.set_z(TOPMENU_Z);
+		topmenu_cursor = Main.display.create_object(cursor);
 
 		for (TopMenuCategory category : topmenu_category) {
-			topmenu_category_text_list.add(Main.display.create_object(new DisplayText(0, bar_y, TOPMENU_CATEGORY_TEXT_SIZE, category.name(), 0x00, 0x00, 0x00, 0xFF)));
+			DisplayText category_text = new DisplayText(0, bar_y, TOPMENU_CATEGORY_TEXT_SIZE, category.name(), 0x00, 0x00, 0x00, 0xFF);
+			category_text.set_z(TOPMENU_Z);
+			topmenu_category_text_list.add(Main.display.create_object(category_text));
 			List<DisplayText> items = new ArrayList<>();
 			for (TopMenuItem item : category.item_list()) {
 				//アイテムは最初は透明（alpha 0 = display側で描画自体スキップされる）
-				items.add(Main.display.create_object(new DisplayText(0, 0, TOPMENU_ITEM_TEXT_SIZE, item.name(), 0xFF, 0xFF, 0xFF, 0)));
+				DisplayText item_text = new DisplayText(0, 0, TOPMENU_ITEM_TEXT_SIZE, item.name(), 0xFF, 0xFF, 0xFF, 0);
+				item_text.set_z(TOPMENU_Z);
+				items.add(Main.display.create_object(item_text));
 			}
 			topmenu_item_text_list.add(items);
 		}
