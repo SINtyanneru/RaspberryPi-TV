@@ -7,19 +7,27 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
 import jp.rumi_room.raspberrypi_tv.Type.AppInfo;
+import jp.rumi_room.raspberrypi_tv.Type.DisplayFramebuffer;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayText;
 import su.rumishistem.rsdf_java.RSDFDecoder;
+import su.rumishistem.rsdf_java.RSDFEncoder;
+import su.rumishistem.rumi_java_logger.SeverityLevel;
 
 public class App {
 	private final static String APP_DIR = "app/";
-	
+
 	private static Map<String, AppInfo> app_table = new HashMap<>();
+	private static OutputStream app_out;
+
+	private static List<DisplayFramebuffer> fb_list = new ArrayList<>();
 
 	public static void init() throws IOException, InterruptedException {
 		File dir = new File(APP_DIR);
@@ -76,7 +84,7 @@ public class App {
 
 		Process p = pb.start();
 		InputStream in = p.getInputStream();
-		OutputStream out = p.getOutputStream();
+		app_out = p.getOutputStream();
 
 		new Thread(new Runnable() {
 			@Override
@@ -104,16 +112,53 @@ public class App {
 						}
 
 						switch (mode) {
+							case "NEW_FB": {
+								long x = ((Number)message.get("X")).longValue();
+								long y = ((Number)message.get("Y")).longValue();
+								long width = ((Number)message.get("W")).longValue();
+								long height = ((Number)message.get("H")).longValue();
 
+								//表示サイズ＝ソースサイズで作る（スケーリングなし）
+								DisplayFramebuffer fb = Main.display.create_object(new DisplayFramebuffer(x, y, width, height, width, height));
+								fb_list.add(fb);
+
+								send_message(new HashMap<>(){{
+									put("TYPE", "NEW_FB");
+									put("PATH", fb.get_socket_path());
+								}});
+								break;
+							}
+
+							case "LOG": {
+								Main.logger.print(SeverityLevel.Informational, ((String)message.get("TEXT")));
+								break;
+							}
 						}
 					}
 
 					//アプリが終了した
+					for (DisplayFramebuffer fb : fb_list) {
+						fb.delete();
+					}
 					Core.end_app();
 				} catch (Exception ex) {
 					ex.printStackTrace();
 				}
 			}
 		}).start();
+	}
+
+	public static void send_key(byte keycode) throws IOException {
+		send_message(new HashMap<>(){{
+			put("TYPE", "EVENT_KEY");
+			put("KEYCODE", (int)keycode);
+		}});
+	}
+
+	private static void send_message(Map<String, Object> message) throws IOException{
+		byte[] rsdf = RSDFEncoder.encode(message);
+		app_out.write(ByteBuffer.allocate(4).putInt(rsdf.length).array());
+		app_out.write(rsdf);
+		app_out.flush();
 	}
 }

@@ -8,6 +8,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import jp.rumi_room.raspberrypi_tv.Type.AppInfo;
+import jp.rumi_room.raspberrypi_tv.Type.DisplayFramebuffer;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayRect;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayText;
 import jp.rumi_room.raspberrypi_tv.Type.TopMenu.TopMenuCategory;
@@ -42,7 +43,7 @@ public class Core {
 	private final static long TOPMENU_CATEGORY_PITCH = 280;	//カテゴリ同士の間隔
 	private final static long TOPMENU_ITEM_PITCH = 76;		//アイテム同士の間隔
 	private final static long TOPMENU_Z = 10000;	//常に最前面に出すためのZ位置（サイドメニューよりは下）
-	private static int topmenu_select_col = 0;
+	private static int topmenu_select_col = 1;
 	private static int topmenu_select_row = 0;
 	private static double topmenu_disp_col = 0;	//表示上の列位置（アニメーション用、小数）
 	private static double topmenu_disp_row = 0;
@@ -392,28 +393,40 @@ public class Core {
 			case HdmiCec.KEY_LEFT: {
 				if ((topmenu_now && menu_open == false) && topmenu_select_col > 0) {
 					change_col(topmenu_select_col - 1);
+					return;
 				}
+
+				if (runing_app) App.send_key(keycode);
 				return;
 			}
 
 			case HdmiCec.KEY_RIGHT: {
 				if ((topmenu_now && menu_open == false) && topmenu_select_col + 1 < topmenu_category.size()) {
 					change_col(topmenu_select_col + 1);
+					return;
 				}
+
+				if (runing_app) App.send_key(keycode);
 				return;
 			}
 
 			case HdmiCec.KEY_UP: {
 				if ((topmenu_now && menu_open == false) && topmenu_select_row > 0) {
 					change_row(topmenu_select_row - 1);
+					return;
 				}
+
+				if (runing_app) App.send_key(keycode);
 				return;
 			}
 
 			case HdmiCec.KEY_DOWN: {
 				if ((topmenu_now && menu_open == false) && topmenu_select_row + 1 < topmenu_category.get(topmenu_select_col).item_list().size()) {
 					change_row(topmenu_select_row + 1);
+					return;
 				}
+
+				if (runing_app) App.send_key(keycode);
 				return;
 			}
 
@@ -425,15 +438,21 @@ public class Core {
 						if (action.isPresent()) {
 							action.get().run();
 						}
+						return;
 					}
 				}
+
+				if (runing_app) App.send_key(keycode);
 				return;
 			}
 
 			case HdmiCec.KEY_BLUE: {
 				if (menu_open) {
 					close_menu();
+					return;
 				}
+
+				if (runing_app) App.send_key(keycode);
 				return;
 			}
 
