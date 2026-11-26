@@ -123,6 +123,7 @@ public class App {
 								long y = ((Number)message.get("Y")).longValue();
 								long width = ((Number)message.get("W")).longValue();
 								long height = ((Number)message.get("H")).longValue();
+								boolean is_alpha = (boolean)message.get("ALPHA");
 
 								//表示サイズ＝ソースサイズで作る（スケーリングなし）
 								DisplayFramebuffer fb = Main.display.create_object(new DisplayFramebuffer(x, y, width, height, width, height));

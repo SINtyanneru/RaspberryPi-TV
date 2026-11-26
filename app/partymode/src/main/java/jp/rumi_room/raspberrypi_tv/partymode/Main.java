@@ -50,16 +50,18 @@ public class Main {
 						put("TYPE", "NEW_FB");
 						put("X", 0L);
 						put("Y", 0L);
-						put("W", screen_width / 2L);
-						put("H", 100L);
+						put("W", (long)screen_width);
+						put("H", (long)screen_height);
+						put("ALPHA", false);
 					}});
 
 					send_message(new HashMap<>(){{
 						put("TYPE", "NEW_FB");
 						put("X", 0L);
 						put("Y", 0L);
-						put("W", (long)screen_width);
-						put("H", (long)screen_height);
+						put("W", screen_width / 2L);
+						put("H", 100L);
+						put("ALPHA", true);
 					}});
 					break;
 				}
