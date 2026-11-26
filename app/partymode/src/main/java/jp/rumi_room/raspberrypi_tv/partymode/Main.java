@@ -6,24 +6,56 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 
 import su.rumishistem.rsdf_java.RSDFDecoder;
 import su.rumishistem.rsdf_java.RSDFEncoder;
 
 public class Main {
 	private static String vide_fb = null;
-	private static SocketChannel indicate_fb = null;
+	private static CountDownLatch fb_cdl = new CountDownLatch(2);
+
 	private static int screen_width = 0;
 	private static int screen_height = 1;
 
-	public static void main(String[] args) throws IOException, InterruptedException{
-		Thread.sleep(5000);
+	private static int indicate_width = 0;
+	private static int indicate_height = 0;
 
+	public static void main(String[] args) throws IOException, InterruptedException{
 		send_message(new HashMap<>(){{
 			put("TYPE", "READY");
 		}});
 
-		receive_loop();
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				try {
+					receive_loop();
+				} catch (IOException e) {
+					System.exit(1);
+				}
+			}
+		}).start();
+
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				HTTPServer.start();
+			}
+		}).start();
+
+		fb_cdl.await();
+		HTTPServer.await();
+
+		send_message(new HashMap<>(){{
+			put("TYPE", "LOG");
+			put("TEXT", "初期化完了しました");
+		}});
+
+		send_message(new HashMap<>(){{
+			put("TYPE", "WEBPAGE");
+			put("PORT", 81);
+		}});
 	}
 
 	private static void receive_loop() throws IOException {
@@ -55,12 +87,15 @@ public class Main {
 						put("ALPHA", false);
 					}});
 
+					indicate_width = screen_width / 2;
+					indicate_height = 100;
+
 					send_message(new HashMap<>(){{
 						put("TYPE", "NEW_FB");
 						put("X", 0L);
 						put("Y", 0L);
-						put("W", screen_width / 2L);
-						put("H", 100L);
+						put("W", (long)indicate_width);
+						put("H", (long)indicate_height);
 						put("ALPHA", true);
 					}});
 					break;
@@ -71,8 +106,10 @@ public class Main {
 
 					if (vide_fb == null) {
 						vide_fb = path;
+						fb_cdl.countDown();
 					} else {
-						indicate_fb = SocketChannel.open(UnixDomainSocketAddress.of(path));
+						Indicate.open_fb(path);
+						fb_cdl.countDown();
 					}
 					break;
 				}

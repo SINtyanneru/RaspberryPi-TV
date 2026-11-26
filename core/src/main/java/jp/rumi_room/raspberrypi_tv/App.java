@@ -1,5 +1,6 @@
 package jp.rumi_room.raspberrypi_tv;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -108,14 +109,14 @@ public class App {
 						//メッセージに応じた処理
 						if (mode.equals("READY")) {
 							starting_text.delete();
+
+							send_message(new HashMap<>(){{
+								put("TYPE", "READY");
+								put("WIDTH", Main.display.get_width());
+								put("HEIGHT", Main.display.get_height());
+							}});
 							continue;
 						}
-
-						send_message(new HashMap<>(){{
-							put("TYPE", "READY");
-							put("WIDTH", Main.display.get_width());
-							put("HEIGHT", Main.display.get_height());
-						}});
 
 						switch (mode) {
 							case "NEW_FB": {
@@ -127,6 +128,7 @@ public class App {
 
 								//表示サイズ＝ソースサイズで作る（スケーリングなし）
 								DisplayFramebuffer fb = Main.display.create_object(new DisplayFramebuffer(x, y, width, height, width, height));
+								fb.set_alpha(is_alpha);
 								fb_list.add(fb);
 
 								send_message(new HashMap<>(){{
@@ -138,6 +140,16 @@ public class App {
 
 							case "LOG": {
 								Main.logger.print(SeverityLevel.Informational, ((String)message.get("TEXT")));
+								break;
+							}
+
+							case "WEBPAGE": {
+								int port = (int)message.get("PORT");
+
+								ByteArrayOutputStream baos = new ByteArrayOutputStream();
+								baos.write(new byte[] { 0x31 });
+								baos.write(ByteBuffer.allocate(4).putInt(port).array());
+								HTTPServer.ws_queue.put(baos.toByteArray());
 								break;
 							}
 						}

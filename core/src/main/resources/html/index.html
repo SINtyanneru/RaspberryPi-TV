@@ -29,11 +29,14 @@
 				<TD COLSPAN="2"><BUTTON onclick="send_keycode(0x72)">メニュー</BUTTON></TD>
 			</TR>
 		</TABLE>
+
+		<IFRAME ID="WEBPAGE"></IFRAME>
 	</BODY>
 	<SCRIPT>
 		let ws;
 		let ping_interval = 0;
 		let mel = {
+			webpage: document.getElementById("WEBPAGE")
 		};
 
 		window.addEventListener("load", async function() {
@@ -54,7 +57,16 @@
 
 			ws.onmessage = function(e) {
 				if (e.data instanceof ArrayBuffer) {
-					console.log("バイナリ受信:", new Uint8Array(e.data));
+					const view = new DataView(e.data);
+					const type = view.getUint8(0);
+
+					switch (type) {
+						case 0x31: {
+							const port = view.getInt32(1);
+							mel.webpage.src = `${window.location.protocol}//${window.location.host}:${port}/`;
+							return;
+						}
+					}
 				} else {
 					console.log("テキスト受信:", e.data);
 				}

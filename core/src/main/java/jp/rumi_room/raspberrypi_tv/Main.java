@@ -115,7 +115,12 @@ public class Main {
 
 		//RJL
 		logger = new RumiJavaLogger();
-		logger.print(SeverityLevel.Ok, "Initialized RumiJavaLogger");
+		try {
+			logger.hijack_std(SeverityLevel.Debug);
+			logger.print(SeverityLevel.Ok, "Initialized RumiJavaLogger");
+		} catch (IOException ex) {
+			ex.printStackTrace();
+		}
 
 		//アプリ
 		try {

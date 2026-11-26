@@ -4,6 +4,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
 
 import io.javalin.Javalin;
@@ -21,8 +23,10 @@ import io.javalin.websocket.WsMessageHandler;
 import jp.rumi_room.raspberrypi_tv.Tool.Resource;
 
 public class HTTPServer {
+	public static BlockingQueue<byte[]> ws_queue = new LinkedBlockingQueue<>();
+
 	public static void start() {
-		Javalin app = Javalin.create().start(3000);
+		Javalin app = Javalin.create().start(80);
 		app.get("/", new Handler() {
 			@Override
 			public void handle(Context ctx) throws Exception {
@@ -54,6 +58,18 @@ public class HTTPServer {
 						} catch (Exception e) {
 							ctx.closeSession();
 						}
+
+						new Thread(new Runnable() {
+							@Override
+							public void run() {
+								try {
+									byte[] data = ws_queue.take();
+									ctx.send(ByteBuffer.wrap(data));
+								} catch (InterruptedException ex) {
+									return;
+								}
+							}
+						}).start();
 					}
 				});
 
