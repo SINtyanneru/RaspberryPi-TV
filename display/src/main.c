@@ -98,6 +98,9 @@ struct display_object {
 	size_t frame_size;
 	size_t frame_received;
 	int has_frame;
+	//フレームバッファー用: 1なら画素ごとのアルファで合成する
+	//（ハードウェアプレーンは使わず、ソフトウェア描画になる）
+	int fb_alpha;
 	//フレームバッファー用: ハードウェアプレーン（使える場合だけ）
 	struct backend_plane *plane;
 	int plane_layer;
@@ -564,13 +567,25 @@ static void draw_framebuffer(struct server *server, struct display_object *objec
 				continue;
 			}
 			if (!object->has_frame || object->frame_front == NULL) {
+				if (object->fb_alpha) {
+					//アルファ有効時は、映像が来る前は透明（下を透かす）
+					continue;
+				}
 				//まだ映像が来ていない間は黒で埋める
 				*dst = 0xFF000000;
 				continue;
 			}
 			uint64_t sx = (uint64_t)(x - x0) * object->src_width / object->width;
+			uint32_t src = ((const uint32_t *)object->frame_front)[sy * object->src_width + sx];
+			if (object->fb_alpha) {
+				//BGRAのアルファで下と合成する
+				blend_pixel(server, x, y,
+					(uint8_t)(src >> 16), (uint8_t)(src >> 8), (uint8_t)src,
+					(uint8_t)(src >> 24));
+				continue;
+			}
 			//BGRAのバイト並びはXRGB8888のワードと一致する
-			*dst = ((const uint32_t *)object->frame_front)[sy * object->src_width + sx] | 0xFF000000;
+			*dst = src | 0xFF000000;
 		}
 	}
 }
@@ -1189,7 +1204,14 @@ static int framebuffer_setup(struct server *server, struct display_object *objec
 	}
 	//バックエンドがあるなら、ハードウェアプレーンの割り当ても試みる。
 	//失敗したらソフトウェア描画のまま（planeはNULL）。
-	if (server->backend != NULL) {
+	//アルファ有効時はプレーンを使わない（プレーンでは下のソフトウェア
+	//描画と画素単位で合成できないため）。既に持っていたら手放す。
+	if (server->backend != NULL && object->fb_alpha && object->plane != NULL) {
+		backend_destroy_plane(server->backend, object->plane);
+		object->plane = NULL;
+		object->plane_layer = -1;
+	}
+	if (server->backend != NULL && !object->fb_alpha) {
 		if (object->plane != NULL &&
 			(object->plane_src_width != object->src_width || object->plane_src_height != object->src_height)) {
 			//映像サイズが変わったら、バッファを作り直すために一度手放す
@@ -1385,8 +1407,13 @@ static int apply_object_args(struct server *server, struct display_object *objec
 		set_object_text(object, args[first + 2].data, args[first + 2].size);
 		return 1;
 	case OBJECT_TYPE_FRAMEBUFFER: {
-		//引数: 表示位置とサイズ(32バイト)、映像のサイズ(16バイト)
-		if (argc - first != 2 || args[first].size != 32 || args[first + 1].size != 16) {
+		//引数: 表示位置とサイズ(32バイト)、映像のサイズ(16バイト)、
+		//任意でフラグ(1バイト、bit0=アルファ有効)
+		int rest = argc - first;
+		if ((rest != 2 && rest != 3) || args[first].size != 32 || args[first + 1].size != 16) {
+			return 0;
+		}
+		if (rest == 3 && args[first + 2].size != 1) {
 			return 0;
 		}
 		uint64_t src_width = read_u64be(args[first + 1].data);
@@ -1401,6 +1428,7 @@ static int apply_object_args(struct server *server, struct display_object *objec
 		object->height = read_u64be(geometry + 24);
 		object->src_width = src_width;
 		object->src_height = src_height;
+		object->fb_alpha = (rest == 3 && (args[first + 2].data[0] & 0x01) != 0) ? 1 : 0;
 		object->a = 0xFF;
 		if (!framebuffer_setup(server, object)) {
 			return 0;

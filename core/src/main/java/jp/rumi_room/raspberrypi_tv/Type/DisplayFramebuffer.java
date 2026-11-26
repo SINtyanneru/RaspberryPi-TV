@@ -11,6 +11,8 @@ import java.nio.ByteOrder;
 //表示コントローラ側で行われる（使えなければソフトウェア描画）。
 //引数3: 表示位置とサイズ（X・Y・横幅・縦幅、各u64、ビッグエンディアン）
 //引数4: 映像のサイズ（横幅・縦幅、各u64、ビッグエンディアン）
+//引数5: フラグ（1バイト）。bit0=アルファ有効（画素ごとのアルファで
+//下と合成する。ハードウェアプレーンは使わずソフトウェア描画になる）
 public class DisplayFramebuffer extends DisplayObject {
 	private long x;
 	private long y;
@@ -18,6 +20,7 @@ public class DisplayFramebuffer extends DisplayObject {
 	private long height;
 	private long source_width;
 	private long source_height;
+	private boolean alpha;
 
 	public DisplayFramebuffer(long x, long y, long width, long height, long source_width, long source_height) {
 		super(Type.FRAMEBUFFER);
@@ -43,6 +46,16 @@ public class DisplayFramebuffer extends DisplayObject {
 		this.source_height = source_height;
 	}
 
+	//アルファ有効/無効を変える（書き換えコマンド用）。
+	//有効にすると画素ごとのアルファで下と合成される。
+	public void set_alpha(boolean alpha) {
+		this.alpha = alpha;
+	}
+
+	public boolean get_alpha() {
+		return this.alpha;
+	}
+
 	//映像を流し込むUNIXソケットのパス。未作成ならnull。
 	public String get_socket_path() {
 		if (this.get_id() == 0) {
@@ -63,6 +76,7 @@ public class DisplayFramebuffer extends DisplayObject {
 		source.order(ByteOrder.BIG_ENDIAN);
 		source.putLong(this.source_width);
 		source.putLong(this.source_height);
-		return new byte[][]{geometry.array(), source.array()};
+		byte[] flag_list = new byte[]{(byte)(this.alpha ? 0x01 : 0x00)};
+		return new byte[][]{geometry.array(), source.array(), flag_list};
 	}
 }
