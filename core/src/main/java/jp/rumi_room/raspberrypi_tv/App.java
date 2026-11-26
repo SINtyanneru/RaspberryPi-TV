@@ -111,6 +111,12 @@ public class App {
 							continue;
 						}
 
+						send_message(new HashMap<>(){{
+							put("TYPE", "READY");
+							put("WIDTH", Main.display.get_width());
+							put("HEIGHT", Main.display.get_height());
+						}});
+
 						switch (mode) {
 							case "NEW_FB": {
 								long x = ((Number)message.get("X")).longValue();

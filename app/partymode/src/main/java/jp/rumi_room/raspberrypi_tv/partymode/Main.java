@@ -1,7 +1,9 @@
 package jp.rumi_room.raspberrypi_tv.partymode;
 
 import java.io.IOException;
+import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -9,19 +11,16 @@ import su.rumishistem.rsdf_java.RSDFDecoder;
 import su.rumishistem.rsdf_java.RSDFEncoder;
 
 public class Main {
+	private static String vide_fb = null;
+	private static SocketChannel indicate_fb = null;
+	private static int screen_width = 0;
+	private static int screen_height = 1;
+
 	public static void main(String[] args) throws IOException, InterruptedException{
 		Thread.sleep(5000);
 
 		send_message(new HashMap<>(){{
 			put("TYPE", "READY");
-		}});
-
-		send_message(new HashMap<>(){{
-			put("TYPE", "NEW_FB");
-			put("X", 0L);
-			put("Y", 0L);
-			put("W", 500L);
-			put("H", 100L);
 		}});
 
 		receive_loop();
@@ -43,12 +42,36 @@ public class Main {
 			Map<String, Object> message = RSDFDecoder.decode(body).get_dict();
 			String mode = (String)message.get("TYPE");
 			switch (mode) {
+				case "READY": {
+					screen_width = (int)message.get("WIDTH");
+					screen_height = (int)message.get("HEIGHT");
+
+					send_message(new HashMap<>(){{
+						put("TYPE", "NEW_FB");
+						put("X", 0L);
+						put("Y", 0L);
+						put("W", screen_width / 2L);
+						put("H", 100L);
+					}});
+
+					send_message(new HashMap<>(){{
+						put("TYPE", "NEW_FB");
+						put("X", 0L);
+						put("Y", 0L);
+						put("W", (long)screen_width);
+						put("H", (long)screen_height);
+					}});
+					break;
+				}
+
 				case "NEW_FB": {
 					String path = (String)message.get("PATH");
-					send_message(new HashMap<>(){{
-						put("TYPE", "LOG");
-						put("TEXT", path + "が届いた");
-					}});
+
+					if (vide_fb == null) {
+						vide_fb = path;
+					} else {
+						indicate_fb = SocketChannel.open(UnixDomainSocketAddress.of(path));
+					}
 					break;
 				}
 			}
