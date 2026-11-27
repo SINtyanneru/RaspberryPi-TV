@@ -111,10 +111,31 @@ public class HTTPServer {
 				};
 				Core.add_playqueue_listener(listener);
 
+				//再生位置の変化をplaytimeイベントで流す
+				final Player.PositionListener position_listener = new Player.PositionListener() {
+					@Override
+					public void on_update() {
+						try {
+							Map<String, Object> payload = new HashMap<>();
+							PlayItem playing = Player.get_playing_item();
+							payload.put("playing", playing != null);
+							payload.put("title", playing != null ? playing.get_title() : null);
+							payload.put("position_ms", Player.get_position_ms());
+							payload.put("duration_ms", Player.get_duration_ms());
+							client.sendEvent("playtime", OM.writeValueAsString(payload));
+						} catch (Exception ex) {
+						}
+					}
+				};
+				Player.add_position_listener(position_listener);
+				//接続直後に現在の状態を1回送る
+				position_listener.on_update();
+
 				client.onClose(new Runnable() {
 					@Override
 					public void run() {
 						Core.detach_playqueue_listener(listener);
+						Player.remove_position_listener(position_listener);
 					}
 				});
 			}
