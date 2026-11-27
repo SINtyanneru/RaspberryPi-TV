@@ -12,10 +12,13 @@ import java.util.*;
 import java.util.concurrent.*;
 import javax.imageio.ImageIO;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jp.rumi_room.raspberrypi_tv.partymode.Tool.YtDlp;
 import jp.rumi_room.raspberrypi_tv.partymode.Type.*;
 
 public class Core {
+	private final static ObjectMapper JSON_MAPPER = new ObjectMapper();
+
 	private static Font font;
 	private static PlayItem download_current_item = null;
 	private static int download_current_percent = 0;
@@ -262,14 +265,47 @@ public class Core {
 			BufferedImage thumbnail;
 			Path cache_dir;
 
-			//動画の概要を取得
-			JsonNode info = YtDlp.get_info(url);
-			video_id = info.get("id").asText().replaceAll("[^A-Za-z0-9_-]", "_");
-			title = info.get("title").asText();
-			author = info.get("uploader").asText();
+			//動画の概要はキャッシュ(info.json)があればそれを使う。無ければ取得してキャッシュへ書く
+			String url_video_id = get_video_id(url);
+			Path url_cache_dir = null;
+			if (url_video_id != null) {
+				url_cache_dir = Main.cache_dir.resolve(url_video_id.replaceAll("[^A-Za-z0-9_-]", "_"));
+			}
+			JsonNode cached_info = null;
+			if (url_cache_dir != null && Files.exists(url_cache_dir.resolve("info.json"))) {
+				try {
+					cached_info = JSON_MAPPER.readTree(Files.readString(url_cache_dir.resolve("info.json")));
+				} catch (Exception ex) {
+					cached_info = null;
+				}
+			}
 
-			cache_dir = Main.cache_dir.resolve(video_id);
-			Files.createDirectories(cache_dir);
+			if (cached_info != null) {
+				video_id = cached_info.get("id").asText();
+				title = cached_info.get("title").asText();
+				author = cached_info.get("author").asText();
+				cache_dir = url_cache_dir;
+			} else {
+				//動画の概要を取得
+				JsonNode info = YtDlp.get_info(url);
+				video_id = info.get("id").asText().replaceAll("[^A-Za-z0-9_-]", "_");
+				title = info.get("title").asText();
+				author = info.get("uploader").asText();
+
+				cache_dir = Main.cache_dir.resolve(video_id);
+				Files.createDirectories(cache_dir);
+
+				//次回からは取得しなくて済むよう、概要をキャッシュへ書く
+				try {
+					Map<String, Object> info_map = new HashMap<>();
+					info_map.put("id", video_id);
+					info_map.put("title", title);
+					info_map.put("author", author);
+					Files.writeString(cache_dir.resolve("info.json"), JSON_MAPPER.writeValueAsString(info_map));
+				} catch (Exception ex) {
+					//キャッシュは書けなくても続行する
+				}
+			}
 
 			//サムネイルを取得
 			Path thumbnail_path = cache_dir.resolve("thumbnail.jpeg");
