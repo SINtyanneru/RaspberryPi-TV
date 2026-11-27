@@ -181,6 +181,7 @@ public class HTTPServer {
 							Map<String, Object> payload = new HashMap<>();
 							PlayItem playing = Player.get_playing();
 							payload.put("playing", playing != null);
+							payload.put("index", Core.get_playing_index());
 							payload.put("paused", Player.is_pause());
 							payload.put("title", playing != null ? playing.get_title() : null);
 							payload.put("position_ms", Player.get_position_ms());

@@ -66,6 +66,12 @@ public class ObservableList<E> {
 		return old_element;
 	}
 
+	public int index_of(E element) {
+		synchronized (list) {
+			return list.indexOf(element);
+		}
+	}
+
 	public E get(int index) {
 		return list.get(index);
 	}

@@ -249,6 +249,15 @@ public class Core {
 		return play_queue;
 	}
 
+	//play_queueの何番目を再生中か(再生していなければ-1)
+	public static int get_playing_index() {
+		PlayItem playing = Player.get_playing();
+		if (playing == null) {
+			return -1;
+		}
+		return play_queue.index_of(playing);
+	}
+
 	public static boolean add_play(String input_url, InetAddress adder) throws Exception{
 		URI url = URI.create(input_url);
 
