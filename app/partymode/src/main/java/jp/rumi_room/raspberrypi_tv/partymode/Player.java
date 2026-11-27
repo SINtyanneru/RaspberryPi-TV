@@ -7,14 +7,13 @@ import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingDeque;
 
 import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayItem;
 
 public class Player {
-	private static BlockingQueue<PlayItem> play_wait_queue = new ArrayBlockingQueue<>(100);
+	private static LinkedBlockingDeque<PlayItem> play_wait_queue = new LinkedBlockingDeque<>(100);
 
 	//再生位置の変化の通知先(SSE配信用)
 	public interface PositionListener {
@@ -28,18 +27,95 @@ public class Player {
 	private static volatile long play_duration_ms = 0;
 	private static volatile Process playing_process = null;
 	private static volatile long seek_request_ms = -1;
+	private static volatile PlayItem prev_item = null;
+	private static volatile boolean paused = false;
+	private static volatile boolean stop_requested = false;
+	private static volatile boolean next_requested = false;
+	private static volatile boolean prev_requested = false;
+
+	public static boolean is_pause() {
+		return paused;
+	}
+
+	//再生中のffmpegを終了させる(止まっているとSIGTERMを受け付けないので、先に再開させる)
+	private static void kill_playing() {
+		Process process = playing_process;
+		if (process == null) {
+			return;
+		}
+		if (paused) {
+			play();
+		}
+		process.destroy();
+	}
 
 	//指定位置へシークする(再生中のffmpegを落として、次ループで-ss付きで起動し直す)
 	public static void seek(long position_ms) {
-		Process process = playing_process;
-		if (playing_item == null || process == null) {
+		if (playing_item == null || playing_process == null) {
 			return;
 		}
 		if (position_ms < 0) {
 			position_ms = 0;
 		}
 		seek_request_ms = position_ms;
-		process.destroy();
+		kill_playing();
+	}
+
+	//一時停止する(ffmpegへSIGSTOPを送る。映像も音声も同じプロセスなので同期は崩れない)
+	public static void pause() {
+		Process process = playing_process;
+		if (process == null || paused) {
+			return;
+		}
+		try {
+			new ProcessBuilder("kill", "-STOP", String.valueOf(process.pid())).start().waitFor();
+			paused = true;
+			notify_position();
+		} catch (Exception ex) {
+		}
+	}
+
+	//再生を再開する(SIGCONT)
+	public static void play() {
+		Process process = playing_process;
+		if (process == null || !paused) {
+			return;
+		}
+		try {
+			new ProcessBuilder("kill", "-CONT", String.valueOf(process.pid())).start().waitFor();
+			paused = false;
+			notify_position();
+		} catch (Exception ex) {
+		}
+	}
+
+	//停止する(再生中を落とし、待ちキューも空にする)
+	public static void stop() {
+		stop_requested = true;
+		play_wait_queue.clear();
+		kill_playing();
+	}
+
+	//次の動画へ進む
+	public static void next() {
+		if (playing_item == null) {
+			return;
+		}
+		next_requested = true;
+		kill_playing();
+	}
+
+	//前の動画へ戻る(前の動画が無ければ先頭から再生し直す)
+	public static void prev() {
+		if (playing_item == null) {
+			return;
+		}
+		if (prev_item == null) {
+			seek(0);
+			return;
+		}
+		prev_requested = true;
+		kill_playing();
 	}
 
 	public static void add_position_listener(PositionListener listener) {
@@ -50,7 +126,8 @@ public class Player {
 		position_listener_list.remove(listener);
 	}
 
-	public static PlayItem get_playing_item() {
+	//再生中の動画を返す(再生していなければnull)
+	public static PlayItem get_playing() {
 		return playing_item;
 	}
 
@@ -163,13 +240,42 @@ public class Player {
 
 					exit_code = process.waitFor();
 					playing_process = null;
+					paused = false;
 
+					//停止要求が来ていたら終わる(待ちキューはstop側でクリア済み)
+					if (stop_requested) {
+						stop_requested = false;
+						next_requested = false;
+						prev_requested = false;
+						seek_request_ms = -1;
+						prev_item = null;
+						break;
+					}
+					//次へ
+					if (next_requested) {
+						next_requested = false;
+						seek_request_ms = -1;
+						prev_item = pi;
+						break;
+					}
+					//前へ(今の動画は、前の動画の次に再生し直す)
+					if (prev_requested) {
+						prev_requested = false;
+						seek_request_ms = -1;
+						PlayItem back = prev_item;
+						play_wait_queue.offerFirst(pi);
+						play_wait_queue.offerFirst(back);
+						prev_item = pi;
+						break;
+					}
 					//シーク要求が来ていたら、同じ動画を指定位置から再生し直す
 					if (seek_request_ms >= 0) {
 						start_offset_ms = seek_request_ms;
 						seek_request_ms = -1;
 						continue;
 					}
+					//自然に終わった
+					prev_item = pi;
 					break;
 				}
 
@@ -198,6 +304,6 @@ public class Player {
 	}
 
 	public static void add_wait_queue(PlayItem pi) throws InterruptedException {
-		play_wait_queue.put(pi);
+		play_wait_queue.putLast(pi);
 	}
 }

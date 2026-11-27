@@ -11,6 +11,13 @@
 			<INPUT TYPE="range" ID="SEEK" MIN="0" MAX="0" VALUE="0" STEP="1000" STYLE="width: 80%">
 			<SPAN ID="POSITION">0:00</SPAN> / <SPAN ID="DURATION">0:00</SPAN>
 		</DIV>
+		<DIV>
+			<BUTTON onclick="control('prev')">前へ</BUTTON>
+			<BUTTON onclick="control('play')">再生</BUTTON>
+			<BUTTON onclick="control('pause')">一時停止</BUTTON>
+			<BUTTON onclick="control('next')">次へ</BUTTON>
+			<BUTTON onclick="control('stop')">停止</BUTTON>
+		</DIV>
 	</BODY>
 	<SCRIPT>
 		const seek_bar = document.getElementById("SEEK");
@@ -45,6 +52,12 @@
 				document.getElementById("POSITION").textContent = format_time(data.position_ms);
 			}
 		});
+
+		async function control(name) {
+			await fetch("/api/" + name, {
+				method: "POST"
+			});
+		}
 
 		function format_time(ms) {
 			const sec = Math.floor(ms / 1000);

@@ -106,6 +106,51 @@ public class HTTPServer {
 			}
 		});
 
+		app.post("/api/pause", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				Player.pause();
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
+		app.post("/api/play", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				Player.play();
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
+		app.post("/api/stop", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				Player.stop();
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
+		app.post("/api/prev", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				Player.prev();
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
+		app.post("/api/next", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				Player.next();
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
 		app.sse("/api/sse", new Consumer<SseClient>() {
 			@Override
 			public void accept(SseClient client) {
@@ -134,8 +179,9 @@ public class HTTPServer {
 					public void on_update() {
 						try {
 							Map<String, Object> payload = new HashMap<>();
-							PlayItem playing = Player.get_playing_item();
+							PlayItem playing = Player.get_playing();
 							payload.put("playing", playing != null);
+							payload.put("paused", Player.is_pause());
 							payload.put("title", playing != null ? playing.get_title() : null);
 							payload.put("position_ms", Player.get_position_ms());
 							payload.put("duration_ms", Player.get_duration_ms());
