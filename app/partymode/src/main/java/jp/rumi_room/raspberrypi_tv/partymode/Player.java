@@ -51,7 +51,7 @@ public class Player {
 
 	//指定位置へシークする(再生中のffmpegを落として、次ループで-ss付きで起動し直す)
 	public static void seek(long position_ms) {
-		if (playing_item == null || playing_process == null) {
+		if (playing_item.get() == null || playing_process.get() == null) {
 			return;
 		}
 		if (position_ms < 0) {
@@ -96,7 +96,7 @@ public class Player {
 
 	//次の動画へ進む(play_queue上で次が無ければ何もしない)
 	public static void next() {
-		if (playing_item == null) return;
+		if (playing_item.get() == null) return;
 
 		int index = Core.get_playing_index();
 		if (index < 0 || index >= Core.get_play_queue().size() - 1) return;
@@ -107,9 +107,9 @@ public class Player {
 
 	//前の動画へ戻る(前の動画が無ければ先頭から再生し直す)
 	public static void prev() {
-		if (playing_item == null) return;
+		if (playing_item.get() == null) return;
 
-		if (prev_item == null) {
+		if (prev_item.get() == null) {
 			seek(0);
 			return;
 		}
@@ -238,14 +238,14 @@ public class Player {
 					}
 
 					exit_code = process.waitFor();
-					playing_process = null;
+					playing_process.set(null);
 					paused.set(false);
 
 					//停止要求が来ていたら終わる(待ちキューはstop側でクリア済み)
 					if (player_request.get() == PlayerRequest.Stop) {
 						player_request.set(PlayerRequest.None);
 						seek_request_ms.set(-1);
-						prev_item = null;
+						prev_item.set(null);
 						break;
 					}
 					//次へ
@@ -276,7 +276,7 @@ public class Player {
 					break;
 				}
 
-				playing_item = null;
+				playing_item.set(null);
 				play_position_ms.set(0);
 				play_duration_ms.set(0);
 				notify_position();
