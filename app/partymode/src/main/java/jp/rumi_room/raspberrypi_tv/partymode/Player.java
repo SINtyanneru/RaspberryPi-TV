@@ -9,8 +9,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayItem;
+import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayerRequest;
 
 public class Player {
 	private static LinkedBlockingDeque<PlayItem> play_wait_queue = new LinkedBlockingDeque<>(100);
@@ -22,25 +26,23 @@ public class Player {
 
 	private static List<PositionListener> position_listener_list = new CopyOnWriteArrayList<>();
 
-	private static volatile PlayItem playing_item = null;
-	private static volatile long play_position_ms = 0;
-	private static volatile long play_duration_ms = 0;
-	private static volatile Process playing_process = null;
-	private static volatile long seek_request_ms = -1;
-	private static volatile PlayItem prev_item = null;
-	private static volatile boolean paused = false;
-	private static volatile boolean stop_requested = false;
-	private static volatile boolean next_requested = false;
-	private static volatile boolean prev_requested = false;
+	private static AtomicReference<PlayItem> playing_item = new AtomicReference<>(null);
+	private static AtomicLong play_position_ms = new AtomicLong(0);
+	private static AtomicLong play_duration_ms = new AtomicLong(0);
+	private static AtomicReference<Process> playing_process = new AtomicReference<>(null);
+	private static AtomicLong seek_request_ms = new AtomicLong(-1);
+	private static AtomicReference<PlayItem> prev_item = new AtomicReference<>(null);
+	private static AtomicBoolean paused = new AtomicBoolean(false);
+	private static AtomicReference<PlayerRequest> player_request = new AtomicReference<>(PlayerRequest.None);
 
 	public static boolean is_pause() {
-		return paused;
+		return paused.get();
 	}
 
 	//再生中のffmpegを終了させる(SIGKILLなので、止まっているプロセスでも即座に落ちる)
 	//出力先はソケットとPulseAudioで、終了処理で書くべきトレーラ等が無いためKILLで問題ない
 	private static void kill_playing() {
-		Process process = playing_process;
+		Process process = playing_process.get();
 		if (process == null) {
 			return;
 		}
@@ -55,19 +57,18 @@ public class Player {
 		if (position_ms < 0) {
 			position_ms = 0;
 		}
-		seek_request_ms = position_ms;
+		seek_request_ms.set(position_ms);;
 		kill_playing();
 	}
 
 	//一時停止する(ffmpegへSIGSTOPを送る。映像も音声も同じプロセスなので同期は崩れない)
 	public static void pause() {
-		Process process = playing_process;
-		if (process == null || paused) {
-			return;
-		}
+		Process process = playing_process.get();
+		if (process == null || paused.get()) return;
+
 		try {
 			new ProcessBuilder("kill", "-STOP", String.valueOf(process.pid())).start().waitFor();
-			paused = true;
+			paused.set(true);;
 			notify_position();
 		} catch (Exception ex) {
 		}
@@ -75,13 +76,12 @@ public class Player {
 
 	//再生を再開する(SIGCONT)
 	public static void play() {
-		Process process = playing_process;
-		if (process == null || !paused) {
-			return;
-		}
+		Process process = playing_process.get();
+		if (process == null || paused.get() == false) return;
+
 		try {
 			new ProcessBuilder("kill", "-CONT", String.valueOf(process.pid())).start().waitFor();
-			paused = false;
+			paused.set(false);
 			notify_position();
 		} catch (Exception ex) {
 		}
@@ -89,34 +89,31 @@ public class Player {
 
 	//停止する(再生中を落とし、待ちキューも空にする)
 	public static void stop() {
-		stop_requested = true;
+		player_request.set(PlayerRequest.Stop);
 		play_wait_queue.clear();
 		kill_playing();
 	}
 
 	//次の動画へ進む(play_queue上で次が無ければ何もしない)
 	public static void next() {
-		if (playing_item == null) {
-			return;
-		}
+		if (playing_item == null) return;
+
 		int index = Core.get_playing_index();
-		if (index < 0 || index >= Core.get_play_queue().size() - 1) {
-			return;
-		}
-		next_requested = true;
+		if (index < 0 || index >= Core.get_play_queue().size() - 1) return;
+
+		player_request.set(PlayerRequest.Next);
 		kill_playing();
 	}
 
 	//前の動画へ戻る(前の動画が無ければ先頭から再生し直す)
 	public static void prev() {
-		if (playing_item == null) {
-			return;
-		}
+		if (playing_item == null) return;
+
 		if (prev_item == null) {
 			seek(0);
 			return;
 		}
-		prev_requested = true;
+		player_request.set(PlayerRequest.Prev);
 		kill_playing();
 	}
 
@@ -130,15 +127,15 @@ public class Player {
 
 	//再生中の動画を返す(再生していなければnull)
 	public static PlayItem get_playing() {
-		return playing_item;
+		return playing_item.get();
 	}
 
 	public static long get_position_ms() {
-		return play_position_ms;
+		return play_position_ms.get();
 	}
 
 	public static long get_duration_ms() {
-		return play_duration_ms;
+		return play_duration_ms.get();
 	}
 
 	private static void notify_position() {
@@ -176,9 +173,9 @@ public class Player {
 				}});
 
 				//再生状態を公開する(SSEで配信するため)
-				playing_item = pi;
-				play_position_ms = 0;
-				play_duration_ms = probe_duration_ms(pi);
+				playing_item.set(pi);;
+				play_position_ms.set(0);;
+				play_duration_ms.set(probe_duration_ms(pi));;
 				notify_position();
 
 				int exit_code = 0;
@@ -216,11 +213,11 @@ public class Player {
 					command.add("pulse");
 					command.add("partymode");
 
-					play_position_ms = start_offset_ms;
+					play_position_ms.set(start_offset_ms);
 					notify_position();
 
 					Process process = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.to(Main.cache_dir.resolve("ffmpeg.log").toFile())).start();
-					playing_process = process;
+					playing_process.set(process);;
 
 					//ffmpegの-progress出力を読みながら再生位置を更新する
 					BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
@@ -230,11 +227,11 @@ public class Player {
 						if (line.startsWith("out_time_ms=")) {
 							try {
 								//out_time_msは名前に反してマイクロ秒。シーク時は開始位置からの相対値になる
-								play_position_ms = start_offset_ms + Long.parseLong(line.substring("out_time_ms=".length()).trim()) / 1000;
+								play_position_ms.set(start_offset_ms + Long.parseLong(line.substring("out_time_ms=".length()).trim()) / 1000);;
 							} catch (Exception ex) {
 							}
-							if (Math.abs(play_position_ms - last_notify_ms) >= 250) {
-								last_notify_ms = play_position_ms;
+							if (Math.abs(play_position_ms.get() - last_notify_ms) >= 250) {
+								last_notify_ms = play_position_ms.get();
 								notify_position();
 							}
 						}
@@ -242,48 +239,46 @@ public class Player {
 
 					exit_code = process.waitFor();
 					playing_process = null;
-					paused = false;
+					paused.set(false);
 
 					//停止要求が来ていたら終わる(待ちキューはstop側でクリア済み)
-					if (stop_requested) {
-						stop_requested = false;
-						next_requested = false;
-						prev_requested = false;
-						seek_request_ms = -1;
+					if (player_request.get() == PlayerRequest.Stop) {
+						player_request.set(PlayerRequest.None);
+						seek_request_ms.set(-1);
 						prev_item = null;
 						break;
 					}
 					//次へ
-					if (next_requested) {
-						next_requested = false;
-						seek_request_ms = -1;
-						prev_item = pi;
+					if (player_request.get() == PlayerRequest.Next) {
+						player_request.set(PlayerRequest.None);
+						seek_request_ms.set(-1);
+						prev_item.set(pi);
 						break;
 					}
 					//前へ(今の動画は、前の動画の次に再生し直す)
-					if (prev_requested) {
-						prev_requested = false;
-						seek_request_ms = -1;
-						PlayItem back = prev_item;
+					if (player_request.get() == PlayerRequest.Prev) {
+						player_request.set(PlayerRequest.None);
+						seek_request_ms.set(-1);
+						PlayItem back = prev_item.get();
 						play_wait_queue.offerFirst(pi);
 						play_wait_queue.offerFirst(back);
-						prev_item = pi;
+						prev_item.set(pi);
 						break;
 					}
 					//シーク要求が来ていたら、同じ動画を指定位置から再生し直す
-					if (seek_request_ms >= 0) {
-						start_offset_ms = seek_request_ms;
-						seek_request_ms = -1;
+					if (seek_request_ms.get() >= 0) {
+						start_offset_ms = seek_request_ms.get();
+						seek_request_ms.set(-1);
 						continue;
 					}
 					//自然に終わった
-					prev_item = pi;
+					prev_item.set(pi);
 					break;
 				}
 
 				playing_item = null;
-				play_position_ms = 0;
-				play_duration_ms = 0;
+				play_position_ms.set(0);
+				play_duration_ms.set(0);
 				notify_position();
 				final int final_exit_code = exit_code;
 				Main.send_message(new HashMap<>(){{
