@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -25,6 +26,21 @@ public class Player {
 	private static volatile PlayItem playing_item = null;
 	private static volatile long play_position_ms = 0;
 	private static volatile long play_duration_ms = 0;
+	private static volatile Process playing_process = null;
+	private static volatile long seek_request_ms = -1;
+
+	//指定位置へシークする(再生中のffmpegを落として、次ループで-ss付きで起動し直す)
+	public static void seek(long position_ms) {
+		Process process = playing_process;
+		if (playing_item == null || process == null) {
+			return;
+		}
+		if (position_ms < 0) {
+			position_ms = 0;
+		}
+		seek_request_ms = position_ms;
+		process.destroy();
+	}
 
 	public static void add_position_listener(PositionListener listener) {
 		position_listener_list.add(listener);
@@ -86,39 +102,76 @@ public class Player {
 				play_duration_ms = probe_duration_ms(pi);
 				notify_position();
 
-				Process process = new ProcessBuilder(
-					"ffmpeg", "-progress", "pipe:1", "-re", "-i", pi.get_file_path().toString(),
+				int exit_code = 0;
+				long start_offset_ms = 0;
+				while (true) {
+					List<String> command = new ArrayList<>();
+					command.add("ffmpeg");
+					command.add("-progress");
+					command.add("pipe:1");
+					if (start_offset_ms > 0) {
+						//シーク時は入力側に-ssを付けて指定位置から読む
+						command.add("-ss");
+						command.add(String.valueOf(start_offset_ms / 1000.0));
+					}
+					command.add("-re");
+					command.add("-i");
+					command.add(pi.get_file_path().toString());
 					//映像
-					"-map", "0:v:0",
+					command.add("-map");
+					command.add("0:v:0");
 					//処理が間に合わない時はフレームを落として音声の時計に追いつく(遅延が溜まらないように)
-					"-fps_mode", "drop",
-					"-vf", "scale=" + Main.screen_width + ":" + Main.screen_height,
-					"-f", "rawvideo", "-pix_fmt", "bgra",
-					"unix://" + Main.vide_fb,
+					command.add("-fps_mode");
+					command.add("drop");
+					command.add("-vf");
+					command.add("scale=" + Main.screen_width + ":" + Main.screen_height);
+					command.add("-f");
+					command.add("rawvideo");
+					command.add("-pix_fmt");
+					command.add("bgra");
+					command.add("unix://" + Main.vide_fb);
 					//音声(PipeWireのPulse互換へ。音量均一化はダウンロード時に済ませてある)
-					"-map", "0:a:0",
-					"-f", "pulse", "partymode"
-				).redirectError(ProcessBuilder.Redirect.to(Main.cache_dir.resolve("ffmpeg.log").toFile())).start();
+					command.add("-map");
+					command.add("0:a:0");
+					command.add("-f");
+					command.add("pulse");
+					command.add("partymode");
 
-				//ffmpegの-progress出力を読みながら再生位置を更新する
-				BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-				String line;
-				long last_notify_ms = 0;
-				while ((line = reader.readLine()) != null) {
-					if (line.startsWith("out_time_ms=")) {
-						try {
-							//out_time_msは名前に反してマイクロ秒
-							play_position_ms = Long.parseLong(line.substring("out_time_ms=".length()).trim()) / 1000;
-						} catch (Exception ex) {
-						}
-						if (Math.abs(play_position_ms - last_notify_ms) >= 250) {
-							last_notify_ms = play_position_ms;
-							notify_position();
+					play_position_ms = start_offset_ms;
+					notify_position();
+
+					Process process = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.to(Main.cache_dir.resolve("ffmpeg.log").toFile())).start();
+					playing_process = process;
+
+					//ffmpegの-progress出力を読みながら再生位置を更新する
+					BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+					String line;
+					long last_notify_ms = start_offset_ms;
+					while ((line = reader.readLine()) != null) {
+						if (line.startsWith("out_time_ms=")) {
+							try {
+								//out_time_msは名前に反してマイクロ秒。シーク時は開始位置からの相対値になる
+								play_position_ms = start_offset_ms + Long.parseLong(line.substring("out_time_ms=".length()).trim()) / 1000;
+							} catch (Exception ex) {
+							}
+							if (Math.abs(play_position_ms - last_notify_ms) >= 250) {
+								last_notify_ms = play_position_ms;
+								notify_position();
+							}
 						}
 					}
-				}
 
-				int exit_code = process.waitFor();
+					exit_code = process.waitFor();
+					playing_process = null;
+
+					//シーク要求が来ていたら、同じ動画を指定位置から再生し直す
+					if (seek_request_ms >= 0) {
+						start_offset_ms = seek_request_ms;
+						seek_request_ms = -1;
+						continue;
+					}
+					break;
+				}
 
 				playing_item = null;
 				play_position_ms = 0;

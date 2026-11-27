@@ -89,6 +89,23 @@ public class HTTPServer {
 			}
 		});
 
+		app.post("/api/seek", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				JsonNode root;
+				try {
+					root = OM.readTree(ctx.body());
+				} catch (JsonProcessingException e) {
+					ctx.status(400);
+					return;
+				}
+
+				Player.seek(root.get("position_ms").asLong());
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
 		app.sse("/api/sse", new Consumer<SseClient>() {
 			@Override
 			public void accept(SseClient client) {

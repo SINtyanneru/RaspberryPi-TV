@@ -6,8 +6,51 @@
 	<BODY>
 		<H1>Watch Together</H1>
 		<INPUT TYPE="text" ID="URL"><BUTTON onclick="add_queue()">キューに追加</BUTTON>
+		<DIV>
+			<DIV ID="NOW_PLAYING"></DIV>
+			<INPUT TYPE="range" ID="SEEK" MIN="0" MAX="0" VALUE="0" STEP="1000" STYLE="width: 80%">
+			<SPAN ID="POSITION">0:00</SPAN> / <SPAN ID="DURATION">0:00</SPAN>
+		</DIV>
 	</BODY>
 	<SCRIPT>
+		const seek_bar = document.getElementById("SEEK");
+		let seeking = false;
+
+		//ドラッグ中はSSEの値で上書きしない
+		seek_bar.addEventListener("input", () => {
+			seeking = true;
+			document.getElementById("POSITION").textContent = format_time(Number(seek_bar.value));
+		});
+		//ドラッグを離したらシークする
+		seek_bar.addEventListener("change", async () => {
+			await fetch("/api/seek", {
+				method: "POST",
+				body: JSON.stringify(
+					{
+						"position_ms": Number(seek_bar.value)
+					}
+				)
+			});
+			seeking = false;
+		});
+
+		const source = new EventSource("/api/sse");
+		source.addEventListener("playtime", (event) => {
+			const data = JSON.parse(event.data);
+			document.getElementById("NOW_PLAYING").textContent = data.playing ? data.title : "";
+			seek_bar.max = data.duration_ms;
+			document.getElementById("DURATION").textContent = format_time(data.duration_ms);
+			if (!seeking) {
+				seek_bar.value = data.position_ms;
+				document.getElementById("POSITION").textContent = format_time(data.position_ms);
+			}
+		});
+
+		function format_time(ms) {
+			const sec = Math.floor(ms / 1000);
+			return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+		}
+
 		async function add_queue() {
 			const url = document.getElementById("URL").value;
 			let ajax = await fetch("/api/queue", {
