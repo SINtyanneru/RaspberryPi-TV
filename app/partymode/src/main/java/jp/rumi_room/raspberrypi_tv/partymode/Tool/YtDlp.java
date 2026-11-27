@@ -166,7 +166,6 @@ public class YtDlp {
 			"--audio-multistreams",
 			"--merge-output-format", "mkv",
 			"--write-subs",
-			"--write-auto-subs",
 			"--sub-langs", sub_langs,
 			"--embed-subs",
 			"--no-playlist",
