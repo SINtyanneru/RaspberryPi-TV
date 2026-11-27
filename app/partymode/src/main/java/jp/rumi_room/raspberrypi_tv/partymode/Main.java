@@ -1,15 +1,14 @@
 package jp.rumi_room.raspberrypi_tv.partymode;
 
 import java.io.IOException;
-import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
-import java.util.HashMap;
-import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
 import java.util.concurrent.CountDownLatch;
 
-import su.rumishistem.rsdf_java.RSDFDecoder;
-import su.rumishistem.rsdf_java.RSDFEncoder;
+import jp.rumi_room.raspberrypi_tv.partymode.Tool.Installer;
+import su.rumishistem.rsdf_java.*;
 
 public class Main {
 	private static String vide_fb = null;
@@ -18,10 +17,21 @@ public class Main {
 	private static int screen_width = 0;
 	private static int screen_height = 1;
 
-	private static int indicate_width = 0;
-	private static int indicate_height = 0;
+	public static int indicate_width = 0;
+	public static int indicate_height = 0;
+
+	public  static Path cache_dir;
 
 	public static void main(String[] args) throws IOException, InterruptedException{
+		cache_dir = Path.of(System.getProperty("user.home"), "rtv-cache");
+		Files.createDirectories(cache_dir);
+
+		try {
+			Installer.install();
+		} catch (Exception ex) {
+			System.exit(1);
+		}
+
 		send_message(new HashMap<>(){{
 			put("TYPE", "READY");
 		}});
@@ -56,6 +66,8 @@ public class Main {
 			put("TYPE", "WEBPAGE");
 			put("PORT", 81);
 		}});
+
+		Core.main();
 	}
 
 	private static void receive_loop() throws IOException {

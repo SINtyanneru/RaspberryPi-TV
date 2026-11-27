@@ -1,2 +1,2 @@
-NAME=パーティーモード
+NAME=Watch Together
 START=/usr/bin/java -jar main.jar --start
