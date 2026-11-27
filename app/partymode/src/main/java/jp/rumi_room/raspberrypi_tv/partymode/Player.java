@@ -25,6 +25,8 @@ public class Player {
 					"ffmpeg", "-re", "-i", pi.get_file_path().toString(),
 					//映像
 					"-map", "0:v:0",
+					//処理が間に合わない時はフレームを落として音声の時計に追いつく(遅延が溜まらないように)
+					"-fps_mode", "drop",
 					"-vf", "scale=" + Main.screen_width + ":" + Main.screen_height,
 					"-f", "rawvideo", "-pix_fmt", "bgra",
 					"unix://" + Main.vide_fb,
