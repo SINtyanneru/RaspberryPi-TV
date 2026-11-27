@@ -62,7 +62,7 @@ public class Core {
 	public static void start() throws IOException {
 		//メニュー初期化
 		menu_width = value_clamp(500, Main.display.get_width() / 4);
-		DisplayRect base = new DisplayRect(menu_width * -1, 0, menu_width, Main.display.get_height(), 0xFF, 0xFF, 0xFF, 0xFF);
+		DisplayRect base = new DisplayRect(menu_width * -1, 0, menu_width, Main.display.get_height(), 0xFF, 0xFF, 0xFF, 0xC0);
 		base.set_z(MENU_Z);
 		menu_base = Main.display.create_object(base);
 		DisplayRect inner = new DisplayRect(0, Main.display.get_height() / 2, menu_width, 0, 0x30, 0x90, 0xFF, 0xB0);
