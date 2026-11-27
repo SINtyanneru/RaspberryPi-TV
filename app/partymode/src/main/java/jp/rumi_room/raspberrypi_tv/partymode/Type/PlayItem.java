@@ -30,6 +30,7 @@ public class PlayItem {
 		this.adder = adder;
 		this.url = url;
 		this.file_path = file_path;
+		this.type = type;
 		this.title = title;
 		this.author = author;
 		this.thumbnail = thumbnail;
