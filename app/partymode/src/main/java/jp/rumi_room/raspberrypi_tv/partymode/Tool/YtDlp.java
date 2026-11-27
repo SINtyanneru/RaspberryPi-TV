@@ -188,7 +188,6 @@ public class YtDlp {
 		String line;
 		int last_percent = -1;
 		while ((line = reader.readLine()) != null) {
-			System.out.println(line);
 			Matcher matcher = PROGRESS_PATTERN.matcher(line);
 			if (matcher.find()) {
 				int percent = (int) Double.parseDouble(matcher.group(1));
