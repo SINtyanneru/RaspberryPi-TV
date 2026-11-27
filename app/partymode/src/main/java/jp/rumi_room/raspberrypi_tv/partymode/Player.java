@@ -177,9 +177,10 @@ public class Player {
 				play_position_ms = 0;
 				play_duration_ms = 0;
 				notify_position();
+				final int final_exit_code = exit_code;
 				Main.send_message(new HashMap<>(){{
 					put("TYPE", "LOG");
-					put("TEXT", "ffmpeg exit code: " + exit_code);
+					put("TEXT", "ffmpeg exit code: " + final_exit_code);
 				}});
 			} catch (Exception ex) {
 				StringWriter string_writer = new StringWriter();
