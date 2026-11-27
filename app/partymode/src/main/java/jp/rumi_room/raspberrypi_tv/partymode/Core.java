@@ -1,30 +1,23 @@
 package jp.rumi_room.raspberrypi_tv.partymode;
 
-import java.awt.AlphaComposite;
-import java.awt.Color;
-import java.awt.Font;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
-import java.net.InetAddress;
-import java.net.URI;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.net.*;
+import java.nio.file.*;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-
+import java.util.*;
+import java.util.concurrent.*;
 import javax.imageio.ImageIO;
-
 import com.fasterxml.jackson.databind.JsonNode;
-
 import jp.rumi_room.raspberrypi_tv.partymode.Tool.YtDlp;
-import jp.rumi_room.raspberrypi_tv.partymode.Type.ObservableList;
-import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayItem;
+import jp.rumi_room.raspberrypi_tv.partymode.Type.*;
 
 public class Core {
 	private static Font font;
+	private static PlayItem download_current_item = null;
+	private static int download_current_percent = 0;
+	private static int download_title_scroll = 0;
 
 	private static ObservableList<PlayItem> play_queue = new ObservableList<>();
 	private static BlockingQueue<PlayItem> download_queue = new ArrayBlockingQueue<>(100);
@@ -36,27 +29,61 @@ public class Core {
 			System.exit(1);
 		}
 
+		//タイトルスクロール用スレッド
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				while (true) {
+					if (download_current_item != null) {
+						download_title_scroll += 2;
+						draw_indicate();
+					}
+					try {
+						Thread.sleep(33);
+					} catch (InterruptedException e) {
+						return;
+					}
+				}
+			}
+		}).start();
+
+		//再生用スレッド
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				Player.main();
+			}
+		}).start();
+
 		while (true) {
 			PlayItem pi = download_queue.take();
-			//動画をダウンロード
+			if (pi.get_type() != PlayItemType.YoutubeVideo) continue;
+
 			try {
 				Path cache_dir = Main.cache_dir.resolve(get_video_id(pi.get_url()));
+				if (Files.exists(cache_dir.resolve("video.mkv"))) {
+					pi.set_downloaded(true);
+					Player.add_wait_queue(pi);
+					continue;
+				}
+
+				download_current_item = pi;
+				download_current_percent = 0;
+				download_title_scroll = 0;
 				boolean ok = YtDlp.download(pi.get_url(), cache_dir.toFile(), "video", new ArrayList<>(), new YtDlp.ProgressListener() {
 					@Override
 					public void on_progress(int percent) {
-						Indicate.get_g().setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
-						Indicate.get_g().setColor(new Color(0, 0, 0, 0));
-						Indicate.get_g().fillRect(0, 0, Main.indicate_width, Main.indicate_height);
-
-						Indicate.get_g().setFont(font.deriveFont(32.0f));
-						Indicate.get_g().setColor(Color.WHITE);
-						Indicate.get_g().drawString(percent + "%", 0, 0);
-
-						Indicate.redraw();
-
+						download_current_percent = percent;
 						pi.set_download_progress(percent);
+						draw_indicate();
 					}
 				});
+
+				download_current_item = null;
+				Indicate.get_g().setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
+				Indicate.get_g().setColor(new Color(0, 0, 0, 0));
+				Indicate.get_g().fillRect(0, 0, Main.indicate_width, Main.indicate_height);
+				Indicate.redraw();
 
 				if (ok == false) {
 					pi.set_error(true);
@@ -64,11 +91,87 @@ public class Core {
 				}
 
 				pi.set_downloaded(true);
+
+				Player.add_wait_queue(pi);
 			} catch (Exception ex) {
+				download_current_item = null;
 				pi.set_error(true);
 				continue;
 			}
 		}
+	}
+
+	private static synchronized void draw_indicate() {
+		PlayItem pi = download_current_item;
+		if (pi == null) {
+			return;
+		}
+		int percent = download_current_percent;
+
+		Indicate.get_g().setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
+		Indicate.get_g().setColor(new Color(0, 0, 0, 0));
+		Indicate.get_g().fillRect(0, 0, Main.indicate_width, Main.indicate_height);
+
+		Indicate.get_g().setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER));
+		Indicate.get_g().setColor(new Color(0, 0, 0, 128));
+		Indicate.get_g().fillRect(0, 0, Main.indicate_width, Main.indicate_height);
+
+		//サムネ
+		BufferedImage thumbnail = pi.get_thumbnail();
+		int thumb_height = Main.indicate_height;
+		int thumb_width = pi.get_thumbnail().getWidth() * thumb_height / pi.get_thumbnail().getHeight();
+		Indicate.get_g().setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+		Indicate.get_g().drawImage(thumbnail, 0, 0, thumb_width, thumb_height, null);
+
+		//進捗
+		String text = percent + "%";
+		Indicate.get_g().setFont(font.deriveFont(32.0f));
+		FontMetrics metrics = Indicate.get_g().getFontMetrics();
+		int text_slot = metrics.stringWidth("100%") + 10;
+
+		//進捗バー
+		int bar_height = 20;
+		int bar_x = thumb_width + 50;
+		int bar_width = Main.indicate_width - bar_x - 50 - text_slot;
+		int bar_y = Main.indicate_height - bar_height - 10;
+
+		//進捗バー背景
+		Indicate.get_g().setColor(Color.WHITE);
+		Indicate.get_g().fillRect(bar_x, bar_y, bar_width, bar_height);
+
+		//進捗バー
+		int progress_width = bar_width * percent / 100;
+		Indicate.get_g().setColor(Color.GREEN);
+		Indicate.get_g().fillRect(bar_x, bar_y, progress_width, bar_height);
+
+		//進捗
+		int text_x = bar_x + bar_width + 10;
+		int text_y = bar_y + (bar_height - metrics.getHeight()) / 2 + metrics.getAscent();
+		Indicate.get_g().setColor(Color.WHITE);
+		Indicate.get_g().drawString(text, text_x, text_y);
+
+		//タイトル
+		String title_text = "Youtube - " + pi.get_title();
+		int title_x = thumb_width + 10;
+		int title_limit = Main.indicate_width - title_x - 10;
+		Indicate.get_g().setColor(Color.WHITE);
+		Indicate.get_g().setFont(font.deriveFont(48.0f));
+		FontMetrics title_metrics = Indicate.get_g().getFontMetrics();
+		int title_y = title_metrics.getAscent();
+		int title_width = title_metrics.stringWidth(title_text);
+		if (title_width > title_limit) {
+			int cycle = title_width + 50;
+			int offset = download_title_scroll % cycle;
+			Shape original_clip = Indicate.get_g().getClip();
+			Indicate.get_g().setClip(title_x, 0, title_limit, Main.indicate_height);
+			Indicate.get_g().drawString(title_text, title_x - offset, title_y);
+			Indicate.get_g().drawString(title_text, title_x - offset + cycle, title_y);
+			Indicate.get_g().setClip(original_clip);
+		} else {
+			Indicate.get_g().drawString(title_text, title_x, title_y);
+		}
+
+		Indicate.redraw();
 	}
 
 	/**
@@ -83,6 +186,10 @@ public class Core {
 	 */
 	public static void detach_playqueue_listener(ObservableList.ChangeListener<PlayItem> listener) {
 		play_queue.remove_listener(listener);
+	}
+
+	public static ObservableList<PlayItem> get_play_queue() {
+		return play_queue;
 	}
 
 	public static boolean add_play(String input_url, InetAddress adder) throws Exception{
@@ -127,6 +234,8 @@ public class Core {
 				LocalDateTime.now(),
 				adder,
 				url,
+				cache_dir.resolve("video.mkv"),
+				PlayItemType.YoutubeVideo,
 
 				title,
 				author,

@@ -11,11 +11,11 @@ import jp.rumi_room.raspberrypi_tv.partymode.Tool.Installer;
 import su.rumishistem.rsdf_java.*;
 
 public class Main {
-	private static String vide_fb = null;
 	private static CountDownLatch fb_cdl = new CountDownLatch(2);
 
-	private static int screen_width = 0;
-	private static int screen_height = 1;
+	public static String vide_fb = null;
+	public static int screen_width = 0;
+	public static int screen_height = 1;
 
 	public static int indicate_width = 0;
 	public static int indicate_height = 0;
@@ -100,7 +100,7 @@ public class Main {
 					}});
 
 					indicate_width = screen_width / 2;
-					indicate_height = 100;
+					indicate_height = screen_height / 5;
 
 					send_message(new HashMap<>(){{
 						put("TYPE", "NEW_FB");
