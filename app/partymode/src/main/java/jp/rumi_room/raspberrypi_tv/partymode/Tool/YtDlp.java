@@ -162,7 +162,8 @@ public class YtDlp {
 		}
 
 		List<String> command_list = make_command(
-			"-f", "bv*+ba*",
+			//再生時のデコードを軽くするため、H.264・1080pまでを優先する(無ければ次の候補へ)
+			"-f", "bv*[vcodec^=avc1][height<=1080]+ba*/bv*[height<=1080]+ba*/bv*+ba*",
 			"--audio-multistreams",
 			"--merge-output-format", "mkv",
 			"--write-subs",
