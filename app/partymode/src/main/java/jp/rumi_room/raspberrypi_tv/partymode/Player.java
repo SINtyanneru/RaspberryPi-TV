@@ -94,9 +94,13 @@ public class Player {
 		kill_playing();
 	}
 
-	//次の動画へ進む
+	//次の動画へ進む(play_queue上で次が無ければ何もしない)
 	public static void next() {
 		if (playing_item == null) {
+			return;
+		}
+		int index = Core.get_playing_index();
+		if (index < 0 || index >= Core.get_play_queue().size() - 1) {
 			return;
 		}
 		next_requested = true;
