@@ -127,8 +127,10 @@ public class App {
 								boolean is_alpha = (boolean)message.get("ALPHA");
 
 								//表示サイズ＝ソースサイズで作る（スケーリングなし）
-								DisplayFramebuffer fb = Main.display.create_object(new DisplayFramebuffer(x, y, width, height, width, height));
-								fb.set_alpha(is_alpha);
+								//アルファは作成コマンドの引数に入るので、create_objectの前に設定する
+								DisplayFramebuffer fb_object = new DisplayFramebuffer(x, y, width, height, width, height);
+								fb_object.set_alpha(is_alpha);
+								DisplayFramebuffer fb = Main.display.create_object(fb_object);
 								fb_list.add(fb);
 
 								send_message(new HashMap<>(){{
