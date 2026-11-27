@@ -3,6 +3,8 @@ package jp.rumi_room.raspberrypi_tv.partymode;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.*;
 import java.nio.file.*;
 import java.time.LocalDateTime;
@@ -63,6 +65,7 @@ public class Core {
 				Path cache_dir = Main.cache_dir.resolve(get_video_id(pi.get_url()));
 				if (Files.exists(cache_dir.resolve("video.mkv"))) {
 					pi.set_downloaded(true);
+					send_log("再生キューに追加(キャッシュ済み): " + pi.get_title());
 					Player.add_wait_queue(pi);
 					continue;
 				}
@@ -86,18 +89,34 @@ public class Core {
 				Indicate.redraw();
 
 				if (ok == false) {
+					send_log("ダウンロード失敗(yt-dlpがエラー終了): " + pi.get_title());
 					pi.set_error(true);
 					continue;
 				}
 
 				pi.set_downloaded(true);
 
+				send_log("再生キューに追加: " + pi.get_title());
 				Player.add_wait_queue(pi);
 			} catch (Exception ex) {
 				download_current_item = null;
+				StringWriter string_writer = new StringWriter();
+				ex.printStackTrace(new PrintWriter(string_writer));
+				send_log(string_writer.toString());
 				pi.set_error(true);
 				continue;
 			}
+		}
+	}
+
+	//親へLOGを送る(失敗しても本処理は止めない)
+	private static void send_log(String text) {
+		try {
+			Main.send_message(new HashMap<>(){{
+				put("TYPE", "LOG");
+				put("TEXT", text);
+			}});
+		} catch (Exception ignored) {
 		}
 	}
 
