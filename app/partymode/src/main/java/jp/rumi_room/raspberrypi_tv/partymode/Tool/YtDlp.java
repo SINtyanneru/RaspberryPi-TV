@@ -4,8 +4,12 @@ import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -21,6 +25,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class YtDlp {
 	final static ObjectMapper JSON_MAPPER = new ObjectMapper();
 	final static Pattern PROGRESS_PATTERN = Pattern.compile("\\[download\\]\\s+(\\d+(?:\\.\\d+)?)%");
+	final static Pattern TIME_PATTERN = Pattern.compile("time=(\\d+):(\\d+):([0-9.]+)");
+	final static Pattern DURATION_PATTERN = Pattern.compile("Duration: (\\d+):(\\d+):([0-9.]+)");
 
 	//ダウンロード進捗の通知先
 	public interface ProgressListener {
@@ -174,35 +180,160 @@ public class YtDlp {
 			url.toString()
 		);
 
+		//進捗は全体を通しで報告する(ダウンロード0〜60、音量の計測60〜80、音量の適用80〜100)
+		int[] last_percent = new int[]{-1};
+		boolean success;
 		if (listener == null) {
 			Process process = new ProcessBuilder(command_list).inheritIO().start();
-			return process.waitFor() == 0;
+			success = process.waitFor() == 0;
+		} else {
+			//進捗行を1行ずつ受け取るため --newline を足し、[download] NN% の行を拾う
+			command_list.add(1, "--newline");
+			ProcessBuilder builder = new ProcessBuilder(command_list);
+			builder.redirectErrorStream(true);
+			Process process = builder.start();
+			BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+			String line;
+			while ((line = reader.readLine()) != null) {
+				//stdoutはRSDFプロトコル用なので、yt-dlpの出力はstderrへ
+				System.err.println(line);
+				Matcher matcher = PROGRESS_PATTERN.matcher(line);
+				if (matcher.find()) {
+					int percent = (int) Double.parseDouble(matcher.group(1));
+					fire_progress(listener, last_percent, percent * 60 / 100);
+				}
+			}
+			success = process.waitFor() == 0;
+		}
+		if (!success) {
+			return false;
 		}
 
-		//進捗行を1行ずつ受け取るため --newline を足し、[download] NN% の行を拾う
-		command_list.add(1, "--newline");
+		//音量均一化はダウンロード時に済ませる(再生時にloudnormを掛けないため)。
+		//失敗してもダウンロード自体は成功扱いにして、元のファイルを残す
+		File out_file = new File(out_dir, file_name + ".mkv");
+		if (out_file.exists()) {
+			try {
+				normalize_loudness(out_file, listener, last_percent);
+			} catch (Exception ex) {
+				System.err.println("音量均一化に失敗(元のファイルをそのまま使う): " + ex);
+			}
+		}
+		if (listener != null) {
+			fire_progress(listener, last_percent, 100);
+		}
+		return true;
+	}
+
+	//進捗を通知する(同じ値の連続通知はしない)
+	private static void fire_progress(ProgressListener listener, int[] last_percent, int percent) {
+		if (percent < 0) {
+			percent = 0;
+		}
+		if (percent > 100) {
+			percent = 100;
+		}
+		if (percent != last_percent[0]) {
+			last_percent[0] = percent;
+			listener.on_progress(percent);
+		}
+	}
+
+	//音量を-14 LUFSへ均一化する。loudnormで計測→計測値を使って適用の2パス。
+	//映像と字幕はそのままコピーし、音声だけ再エンコードする
+	private static void normalize_loudness(File file, ProgressListener listener, int[] last_percent) throws Exception {
+		List<String> measure_command = new ArrayList<>();
+		measure_command.add("ffmpeg");
+		measure_command.add("-hide_banner");
+		measure_command.add("-i");
+		measure_command.add(file.getPath());
+		measure_command.add("-map");
+		measure_command.add("0:a:0");
+		measure_command.add("-af");
+		measure_command.add("loudnorm=I=-14:TP=-1.0:LRA=11:print_format=json");
+		measure_command.add("-f");
+		measure_command.add("null");
+		measure_command.add("-");
+		String measure_output = run_ffmpeg(measure_command, listener, last_percent, 60, 20);
+
+		int json_start = measure_output.lastIndexOf("{");
+		int json_end = measure_output.lastIndexOf("}");
+		if (json_start < 0 || json_end <= json_start) {
+			throw new IOException("loudnormの計測結果が取れなかった");
+		}
+		JsonNode measured = JSON_MAPPER.readTree(measure_output.substring(json_start, json_end + 1));
+
+		String filter = "loudnorm=I=-14:TP=-1.0:LRA=11"
+			+ ":measured_I=" + measured.get("input_i").asText()
+			+ ":measured_LRA=" + measured.get("input_lra").asText()
+			+ ":measured_TP=" + measured.get("input_tp").asText()
+			+ ":measured_thresh=" + measured.get("input_thresh").asText()
+			+ ":offset=" + measured.get("target_offset").asText()
+			+ ":linear=true";
+
+		File tmp_file = new File(file.getParentFile(), file.getName().replace(".mkv", ".loud.mkv"));
+		List<String> apply_command = new ArrayList<>();
+		apply_command.add("ffmpeg");
+		apply_command.add("-hide_banner");
+		apply_command.add("-y");
+		apply_command.add("-i");
+		apply_command.add(file.getPath());
+		apply_command.add("-map");
+		apply_command.add("0");
+		apply_command.add("-c");
+		apply_command.add("copy");
+		apply_command.add("-c:a");
+		apply_command.add("libopus");
+		apply_command.add("-b:a");
+		apply_command.add("192k");
+		apply_command.add("-af");
+		apply_command.add(filter);
+		apply_command.add(tmp_file.getPath());
+		try {
+			run_ffmpeg(apply_command, listener, last_percent, 80, 20);
+		} catch (Exception ex) {
+			tmp_file.delete();
+			throw ex;
+		}
+		Files.move(tmp_file.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+	}
+
+	//ffmpegを実行し、出力を全部返す。進捗はtime=の行から計算して通知する
+	private static String run_ffmpeg(List<String> command_list, ProgressListener listener, int[] last_percent, int base_percent, int span_percent) throws Exception {
 		ProcessBuilder builder = new ProcessBuilder(command_list);
 		builder.redirectErrorStream(true);
 		Process process = builder.start();
-		BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-		String line;
-		int last_percent = -1;
-		while ((line = reader.readLine()) != null) {
-			//stdoutはRSDFプロトコル用なので、yt-dlpの出力はstderrへ
-			System.err.println(line);
-			Matcher matcher = PROGRESS_PATTERN.matcher(line);
-			if (matcher.find()) {
-				int percent = (int) Double.parseDouble(matcher.group(1));
-				if (percent != last_percent) {
-					last_percent = percent;
-					listener.on_progress(percent);
+		StringBuilder output = new StringBuilder();
+		InputStreamReader input = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8);
+		char[] chunk = new char[4096];
+		double duration_sec = -1;
+		int read;
+		while ((read = input.read(chunk)) >= 0) {
+			output.append(chunk, 0, read);
+			if (listener != null) {
+				if (duration_sec < 0) {
+					Matcher duration_matcher = DURATION_PATTERN.matcher(output);
+					if (duration_matcher.find()) {
+						duration_sec = Integer.parseInt(duration_matcher.group(1)) * 3600 + Integer.parseInt(duration_matcher.group(2)) * 60 + Double.parseDouble(duration_matcher.group(3));
+					}
+				}
+				if (duration_sec > 0) {
+					int from = Math.max(0, output.length() - 2048);
+					Matcher time_matcher = TIME_PATTERN.matcher(output.substring(from));
+					double current_sec = -1;
+					while (time_matcher.find()) {
+						current_sec = Integer.parseInt(time_matcher.group(1)) * 3600 + Integer.parseInt(time_matcher.group(2)) * 60 + Double.parseDouble(time_matcher.group(3));
+					}
+					if (current_sec >= 0) {
+						fire_progress(listener, last_percent, base_percent + (int)(span_percent * current_sec / duration_sec));
+					}
 				}
 			}
 		}
-		boolean success = process.waitFor() == 0;
-		if (success && last_percent != 100) {
-			listener.on_progress(100);
+		int exit_code = process.waitFor();
+		if (exit_code != 0) {
+			throw new IOException("ffmpeg exit code: " + exit_code);
 		}
-		return success;
+		return output.toString();
 	}
 }

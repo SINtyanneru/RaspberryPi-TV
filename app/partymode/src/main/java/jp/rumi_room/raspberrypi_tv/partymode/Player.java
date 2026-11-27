@@ -30,9 +30,8 @@ public class Player {
 					"-vf", "scale=" + Main.screen_width + ":" + Main.screen_height,
 					"-f", "rawvideo", "-pix_fmt", "bgra",
 					"unix://" + Main.vide_fb,
-					//音声(PipeWireのPulse互換へ、loudnormで音量均一化:-14 LUFS目標、静かな動画は持ち上げる)
+					//音声(PipeWireのPulse互換へ。音量均一化はダウンロード時に済ませてある)
 					"-map", "0:a:0",
-					"-af", "loudnorm=I=-14:TP=-1.0:LRA=11",
 					"-f", "pulse", "partymode"
 				).redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.to(Main.cache_dir.resolve("ffmpeg.log").toFile())).start();
 
