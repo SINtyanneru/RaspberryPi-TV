@@ -37,16 +37,14 @@ public class Player {
 		return paused;
 	}
 
-	//再生中のffmpegを終了させる(止まっているとSIGTERMを受け付けないので、先に再開させる)
+	//再生中のffmpegを終了させる(SIGKILLなので、止まっているプロセスでも即座に落ちる)
+	//出力先はソケットとPulseAudioで、終了処理で書くべきトレーラ等が無いためKILLで問題ない
 	private static void kill_playing() {
 		Process process = playing_process;
 		if (process == null) {
 			return;
 		}
-		if (paused) {
-			play();
-		}
-		process.destroy();
+		process.destroyForcibly();
 	}
 
 	//指定位置へシークする(再生中のffmpegを落として、次ループで-ss付きで起動し直す)
