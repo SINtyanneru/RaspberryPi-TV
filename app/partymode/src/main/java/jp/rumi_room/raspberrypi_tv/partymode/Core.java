@@ -20,6 +20,8 @@ public class Core {
 	private static PlayItem download_current_item = null;
 	private static int download_current_percent = 0;
 	private static int download_title_scroll = 0;
+	private static String indicate_error_text = null;
+	private static long indicate_error_until = 0;
 
 	private static ObservableList<PlayItem> play_queue = new ObservableList<>();
 	private static BlockingQueue<PlayItem> download_queue = new ArrayBlockingQueue<>(100);
@@ -36,6 +38,13 @@ public class Core {
 			@Override
 			public void run() {
 				while (true) {
+					//エラー表示の期限が来たら消す
+					synchronized (Core.class) {
+						if (indicate_error_text != null && System.currentTimeMillis() >= indicate_error_until) {
+							indicate_error_text = null;
+							clear_indicate();
+						}
+					}
 					if (download_current_item != null) {
 						download_title_scroll += 2;
 						draw_indicate();
@@ -83,13 +92,11 @@ public class Core {
 				});
 
 				download_current_item = null;
-				Indicate.get_g().setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
-				Indicate.get_g().setColor(new Color(0, 0, 0, 0));
-				Indicate.get_g().fillRect(0, 0, Main.indicate_width, Main.indicate_height);
-				Indicate.redraw();
+				clear_indicate();
 
 				if (ok == false) {
 					send_log("ダウンロード失敗(yt-dlpがエラー終了): " + pi.get_title());
+					show_indicate_error("ダウンロード失敗: " + pi.get_title());
 					pi.set_error(true);
 					continue;
 				}
@@ -103,10 +110,38 @@ public class Core {
 				StringWriter string_writer = new StringWriter();
 				ex.printStackTrace(new PrintWriter(string_writer));
 				send_log(string_writer.toString());
+				show_indicate_error("エラー: " + pi.get_title());
 				pi.set_error(true);
 				continue;
 			}
 		}
+	}
+
+	//Indicateを全透明にして消す
+	private static synchronized void clear_indicate() {
+		Indicate.get_g().setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
+		Indicate.get_g().setColor(new Color(0, 0, 0, 0));
+		Indicate.get_g().fillRect(0, 0, Main.indicate_width, Main.indicate_height);
+		Indicate.redraw();
+	}
+
+	//Indicateにエラーを5秒間出す(期限が来たらスクロール用スレッドが消す)
+	private static synchronized void show_indicate_error(String text) {
+		indicate_error_text = text;
+		indicate_error_until = System.currentTimeMillis() + 5000;
+
+		Graphics2D g = Indicate.get_g();
+		g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
+		g.setColor(new Color(0, 0, 0, 0));
+		g.fillRect(0, 0, Main.indicate_width, Main.indicate_height);
+		g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER));
+		g.setColor(new Color(60, 0, 0, 160));
+		g.fillRect(0, 0, Main.indicate_width, Main.indicate_height);
+		g.setFont(font.deriveFont(32.0f));
+		g.setColor(new Color(255, 150, 150));
+		FontMetrics metrics = g.getFontMetrics();
+		g.drawString(text, 20, (Main.indicate_height - metrics.getHeight()) / 2 + metrics.getAscent());
+		Indicate.redraw();
 	}
 
 	//親へLOGを送る(失敗しても本処理は止めない)
