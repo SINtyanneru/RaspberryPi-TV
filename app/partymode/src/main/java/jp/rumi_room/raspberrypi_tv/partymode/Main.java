@@ -55,6 +55,12 @@ public class Main {
 		}).start();
 
 		fb_cdl.await();
+
+		send_message(new HashMap<>(){{
+			put("TYPE", "LOG");
+			put("TEXT", "フレームバッファ準備完了");
+		}});
+
 		HTTPServer.await();
 
 		send_message(new HashMap<>(){{

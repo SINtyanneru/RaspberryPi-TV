@@ -24,6 +24,26 @@ public class HTTPServer {
 	private static CountDownLatch cdl = new CountDownLatch(1);
 
 	public static void start() {
+		try {
+			start_server();
+		} catch (Exception ex) {
+			//起動失敗してもawaitで永久に止まらないようにする(ウェブページだけ死んで、本体は動く)
+			ex.printStackTrace();
+			try {
+				StringWriter string_writer = new StringWriter();
+				ex.printStackTrace(new PrintWriter(string_writer));
+				Main.send_message(new HashMap<>(){{
+					put("TYPE", "LOG");
+					put("TEXT", "HTTPServer起動失敗: " + string_writer.toString());
+				}});
+			} catch (Exception ignored) {
+			}
+		} finally {
+			cdl.countDown();
+		}
+	}
+
+	private static void start_server() {
 		Javalin app = Javalin.create().start(81);
 
 		app.get("/", new Handler() {

@@ -29,8 +29,12 @@ public class ObservableList<E> {
 			list.add(element);
 		}
 		//通知はロックの外でやる(遅いリスナーが変更処理を止めないため)
+		//リスナーの例外でadd自体が失敗してはいけないので、通知の失敗は握りつぶす
 		for (ChangeListener<E> listener : listener_list) {
-			listener.on_add(index, element);
+			try {
+				listener.on_add(index, element);
+			} catch (Exception ignored) {
+			}
 		}
 	}
 
@@ -40,7 +44,10 @@ public class ObservableList<E> {
 			removed = list.remove(index);
 		}
 		for (ChangeListener<E> listener : listener_list) {
-			listener.on_remove(index, removed);
+			try {
+				listener.on_remove(index, removed);
+			} catch (Exception ignored) {
+			}
 		}
 		return removed;
 	}
@@ -51,7 +58,10 @@ public class ObservableList<E> {
 			old_element = list.set(index, element);
 		}
 		for (ChangeListener<E> listener : listener_list) {
-			listener.on_set(index, old_element, element);
+			try {
+				listener.on_set(index, old_element, element);
+			} catch (Exception ignored) {
+			}
 		}
 		return old_element;
 	}
