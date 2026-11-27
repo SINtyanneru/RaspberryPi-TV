@@ -217,7 +217,7 @@ public class Player {
 					notify_position();
 
 					Process process = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.to(Main.cache_dir.resolve("ffmpeg.log").toFile())).start();
-					playing_process.set(process);;
+					playing_process.set(process);
 
 					//ffmpegの-progress出力を読みながら再生位置を更新する
 					BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
