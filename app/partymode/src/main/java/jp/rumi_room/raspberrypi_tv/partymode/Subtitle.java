@@ -11,6 +11,7 @@ import java.nio.*;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 //字幕を映像の上に重ねるフレームバッファ(地デジの字幕のように、白文字に黒い縁取りで下部中央に出す)
 public class Subtitle {
@@ -33,6 +34,12 @@ public class Subtitle {
 
 	private static List<Cue> cue_list = new ArrayList<>();
 	private static Cue shown_cue = null;
+
+	//字幕の表示位置(キューが変わるたびに下部の中でランダムに決める)
+	private static Random random = new Random();
+	private static boolean position_dirty = false;
+	private static int box_x = 0;
+	private static int box_bottom = 0;
 
 	public static void open_fb(String path) throws IOException {
 		fb = SocketChannel.open(UnixDomainSocketAddress.of(path));
@@ -78,6 +85,9 @@ public class Subtitle {
 			return;
 		}
 		shown_cue = active;
+		if (active != null) {
+			position_dirty = true;
+		}
 		draw();
 	}
 
@@ -100,15 +110,48 @@ public class Subtitle {
 			g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
 			String[] line_list = shown_cue.text.split("\n");
+			FontMetrics metrics = g.getFontMetrics();
 			int line_height = font_size * 5 / 4;
 			int margin_bottom = Main.screen_height * 40 / 1080;
+			int pad_x = font_size / 2;
+			int pad_y = font_size / 4;
+
+			int max_width = 0;
+			for (String line : line_list) {
+				int width = metrics.stringWidth(line);
+				if (width > max_width) {
+					max_width = width;
+				}
+			}
+			int box_width = max_width + pad_x * 2;
+			int box_height = metrics.getAscent() + metrics.getDescent() + line_height * (line_list.length - 1) + pad_y * 2;
+
+			//表示位置はキューごとに下部の中でランダムに決める(地デジの字幕が位置指定で動くのの真似)
+			if (position_dirty) {
+				position_dirty = false;
+				int margin_x = font_size;
+				int span_x = Main.screen_width - box_width - margin_x * 2;
+				if (span_x > 0) {
+					box_x = margin_x + random.nextInt(span_x);
+				} else {
+					box_x = (Main.screen_width - box_width) / 2;
+				}
+				int default_bottom = Main.screen_height - margin_bottom + metrics.getDescent() + pad_y;
+				box_bottom = default_bottom - random.nextInt(Main.screen_height / 4 + 1);
+			}
+
+			//字幕の後ろに半透明の四角形を出して見やすくする
+			g.setColor(new Color(0, 0, 0, 160));
+			g.fillRect(box_x, box_bottom - box_height, box_width, box_height);
+
 			//一番下の行のベースラインから、上へ積む
-			int base_y = Main.screen_height - margin_bottom;
+			int base_y = box_bottom - pad_y - metrics.getDescent();
+			int box_center_x = box_x + box_width / 2;
 			for (int i = line_list.length - 1; i >= 0; i--) {
 				String line = line_list[i];
 				if (line.length() > 0) {
-					int line_width = g.getFontMetrics().stringWidth(line);
-					int x = (Main.screen_width - line_width) / 2;
+					int line_width = metrics.stringWidth(line);
+					int x = box_center_x - line_width / 2;
 					draw_outlined_text(line, x, base_y, draw_font, font_size);
 				}
 				base_y -= line_height;
