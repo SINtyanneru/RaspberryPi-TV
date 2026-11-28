@@ -45,9 +45,9 @@ public class Core {
 	private final static long TOPMENU_Z = 10000;	//常に最前面に出すためのZ位置（サイドメニューよりは下）
 	private static int topmenu_select_col = 1;
 	private static int topmenu_select_row = 0;
-	private static double topmenu_disp_col = 0;	//表示上の列位置（アニメーション用、小数）
+	private static double topmenu_disp_col = 1;	//表示上の列位置（アニメーション用、小数、初期値はtopmenu_select_colと揃える）
 	private static double topmenu_disp_row = 0;
-	private static double topmenu_from_col = 0;
+	private static double topmenu_from_col = 1;
 	private static double topmenu_from_row = 0;
 	private static long topmenu_col_anim_start = 0;
 	private static long topmenu_row_anim_start = 0;
