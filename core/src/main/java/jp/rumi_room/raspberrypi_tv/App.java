@@ -157,10 +157,15 @@ public class App {
 						}
 					}
 
-					//アプリが終了した
+					//アプリが終了した(1個の削除に失敗しても残りと終了処理は続ける)
 					for (DisplayFramebuffer fb : fb_list) {
-						fb.delete();
+						try {
+							fb.delete();
+						} catch (IOException e) {
+							e.printStackTrace();
+						}
 					}
+					fb_list.clear();
 					Core.end_app();
 				} catch (Exception ex) {
 					ex.printStackTrace();

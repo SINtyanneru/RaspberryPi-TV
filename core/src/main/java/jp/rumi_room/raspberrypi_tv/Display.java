@@ -47,7 +47,7 @@ public class Display {
 
 	//プロセスが存在することを確認し、無ければ起動する。
 	//まだコマンドは送らないので、画面は出ない。
-	public void init() throws IOException {
+	public synchronized void init() throws IOException {
 		if (this.process != null && this.process.isAlive()) {
 			return;
 		}
@@ -60,7 +60,7 @@ public class Display {
 	}
 
 	//初期化コマンドを送る。ここで画面が切り替わる。
-	public void start() throws IOException {
+	public synchronized void start() throws IOException {
 		int status = this.send_command(COMMAND_INIT);
 		if (status != STATUS_OK) {
 			throw new IOException("display init failed: status=0x" + Integer.toHexString(status));
@@ -72,7 +72,7 @@ public class Display {
 	//引数2: 種類（u8）
 	//引数3: Z位置（i64、ビッグエンディアン）
 	//引数4以降: 種類ごとの内容（DisplayObject.build_args）
-	public <T extends DisplayObject> T create_object(T object) throws IOException {
+	public synchronized <T extends DisplayObject> T create_object(T object) throws IOException {
 		if (object.get_id() == 0) {
 			object.set_id(this.next_object_id);
 			this.next_object_id++;
@@ -97,7 +97,7 @@ public class Display {
 	//オブジェクトを書き換える（位置・サイズ・色・Z位置）。作り直さないので軽い。
 	//DisplayObject.update()からだけ呼ぶこと。
 	//引数1: ID、引数2: Z位置、引数3以降: 種類ごとの内容（DisplayObject.build_args）
-	public void __update_object(DisplayObject object) throws IOException {
+	public synchronized void __update_object(DisplayObject object) throws IOException {
 		if (object.get_id() == 0) {
 			throw new IOException("object is not created yet");
 		}
@@ -115,7 +115,7 @@ public class Display {
 	//オブジェクトを削除する。削除できたらIDを未割り当てに戻す。
 	//DisplayObject.delete()からだけ呼ぶこと。
 	//引数1: ID
-	public void __delete_object(DisplayObject object) throws IOException {
+	public synchronized void __delete_object(DisplayObject object) throws IOException {
 		if (object.get_id() == 0) {
 			throw new IOException("object is not created yet");
 		}
@@ -130,7 +130,7 @@ public class Display {
 
 	//全オブジェクトを削除する。作成済みオブジェクトのIDも未割り当てに戻す。
 	//引数なし。
-	public void delete_all_objects() throws IOException {
+	public synchronized void delete_all_objects() throws IOException {
 		int status = this.send_command(COMMAND_DELETE_ALL_OBJECTS);
 		if (status != STATUS_OK) {
 			throw new IOException("display delete all objects failed: status=0x" + Integer.toHexString(status));
@@ -153,7 +153,7 @@ public class Display {
 	}
 
 	//画面サイズ取得コマンドを送り、{幅, 高さ}を返す。
-	private int[] query_size() throws IOException {
+	private synchronized int[] query_size() throws IOException {
 		int status = this.send_command(COMMAND_GET_SIZE);
 		if (status != STATUS_OK) {
 			throw new IOException("display get size failed: status=0x" + Integer.toHexString(status));
@@ -181,7 +181,7 @@ public class Display {
 	}
 
 	//コマンドを1つ送り、応答のステータスを返す。
-	private int send_command(byte command, byte[]... args) throws IOException {
+	private synchronized int send_command(byte command, byte[]... args) throws IOException {
 		if (this.process == null || !this.process.isAlive()) {
 			throw new IOException("display process is not running");
 		}
