@@ -1,12 +1,20 @@
 package jp.rumi_room.raspberrypi_tv;
 
 import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.UnixDomainSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import jp.rumi_room.raspberrypi_tv.Tool.QrCode;
 import jp.rumi_room.raspberrypi_tv.Type.AppInfo;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayFramebuffer;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayRect;
@@ -55,6 +63,14 @@ public class Core {
 	private static List<DisplayText> topmenu_category_text_list = new ArrayList<>();
 	private static List<List<DisplayText>> topmenu_item_text_list = new ArrayList<>();
 	private static DisplayRect topmenu_cursor;
+
+	//トップメニュー左下の自機URL表示(URLテキストとQRコード)
+	private static DisplayText topmenu_url_text;
+	private static DisplayFramebuffer topmenu_url_qr;
+	private static String topmenu_url = "";
+	private static long topmenu_url_qr_x;
+	private static long topmenu_url_qr_y;
+	private static long topmenu_url_qr_size;
 
 	//APP
 	private static boolean runing_app = false;
@@ -127,6 +143,24 @@ public class Core {
 	private static void show_topmenu() {
 		topmenu_now = true;
 		topmenu_dirty = true;
+
+		//URL表示を戻す(IPが変わっていたらテキストとQRを作り直す)
+		if (topmenu_url_text != null && topmenu_url_qr != null) {
+			try {
+				String url = "http://" + get_local_ip() + "/";
+				if (url.equals(topmenu_url) == false) {
+					topmenu_url = url;
+					topmenu_url_text.set_text(url);
+					write_qr_frame();
+				}
+				topmenu_url_text.set_color(0x00, 0x00, 0x00, 0xFF);
+				topmenu_url_text.update();
+				topmenu_url_qr.set_geometry(topmenu_url_qr_x, topmenu_url_qr_y, topmenu_url_qr_size, topmenu_url_qr_size);
+				topmenu_url_qr.update();
+			} catch (Exception e) {
+				System.err.println("URL表示の復帰に失敗: " + e);
+			}
+		}
 	}
 
 	private static void hide_topmenu() throws IOException {
@@ -144,6 +178,16 @@ public class Core {
 		}
 		topmenu_cursor.set_color(0x00, 0x00, 0x00, 0x00);
 		topmenu_cursor.update();
+
+		if (topmenu_url_text != null) {
+			topmenu_url_text.set_color(0x00, 0x00, 0x00, 0x00);
+			topmenu_url_text.update();
+		}
+		if (topmenu_url_qr != null) {
+			//フレームバッファーは画面外へ逃がして隠す
+			topmenu_url_qr.set_geometry(topmenu_url_qr_x, Main.display.get_height() + topmenu_url_qr_size, topmenu_url_qr_size, topmenu_url_qr_size);
+			topmenu_url_qr.update();
+		}
 	}
 
 	private static void init_topmenu_objects() throws IOException {
@@ -166,6 +210,85 @@ public class Core {
 				items.add(Main.display.create_object(item_text));
 			}
 			topmenu_item_text_list.add(items);
+		}
+
+		//左下に自機のURLテキストと、その上にQRコードを出す
+		try {
+			long display_height = Main.display.get_height();
+			long margin = display_height * 40 / 1080;
+			long text_size = display_height * 30 / 1080;
+			topmenu_url_qr_size = display_height * 150 / 1080;
+			topmenu_url = "http://" + get_local_ip() + "/";
+			long text_y = display_height - margin - text_size;
+			topmenu_url_qr_x = margin;
+			topmenu_url_qr_y = text_y - margin / 2 - topmenu_url_qr_size;
+
+			DisplayText url_text = new DisplayText(margin, text_y, text_size, topmenu_url, 0x00, 0x00, 0x00, 0xFF);
+			url_text.set_z(TOPMENU_Z);
+			topmenu_url_text = Main.display.create_object(url_text);
+
+			DisplayFramebuffer qr = new DisplayFramebuffer(topmenu_url_qr_x, topmenu_url_qr_y, topmenu_url_qr_size, topmenu_url_qr_size, 300, 300);
+			qr.set_z(TOPMENU_Z);
+			topmenu_url_qr = Main.display.create_object(qr);
+			write_qr_frame();
+		} catch (Exception e) {
+			System.err.println("URL表示の初期化に失敗: " + e);
+		}
+	}
+
+	//自機のローカルIP(サイトローカルのIPv4、有線・無線の実インターフェースを優先)
+	private static String get_local_ip() {
+		String fallback = null;
+		try {
+			Enumeration<NetworkInterface> interface_list = NetworkInterface.getNetworkInterfaces();
+			while (interface_list.hasMoreElements()) {
+				NetworkInterface ni = interface_list.nextElement();
+				if (ni.isLoopback() || ni.isUp() == false) {
+					continue;
+				}
+				Enumeration<InetAddress> address_list = ni.getInetAddresses();
+				while (address_list.hasMoreElements()) {
+					InetAddress address = address_list.nextElement();
+					if (address instanceof Inet4Address && address.isSiteLocalAddress()) {
+						String name = ni.getName();
+						if (name.startsWith("eth") || name.startsWith("en") || name.startsWith("wl")) {
+							return address.getHostAddress();
+						}
+						if (fallback == null) {
+							fallback = address.getHostAddress();
+						}
+					}
+				}
+			}
+		} catch (Exception e) {
+		}
+		if (fallback != null) {
+			return fallback;
+		}
+		return "127.0.0.1";
+	}
+
+	//QRコードのフレームをフレームバッファーへ流し込む
+	private static void write_qr_frame() throws Exception {
+		byte[] frame = QrCode.build_frame(topmenu_url, 300);
+		SocketChannel channel = null;
+		for (int i = 0; i < 50 && channel == null; i++) {
+			try {
+				channel = SocketChannel.open(UnixDomainSocketAddress.of(topmenu_url_qr.get_socket_path()));
+			} catch (IOException e) {
+				Thread.sleep(100);
+			}
+		}
+		if (channel == null) {
+			throw new IOException("QR用フレームバッファーに接続できません");
+		}
+		try {
+			ByteBuffer buffer = ByteBuffer.wrap(frame);
+			while (buffer.hasRemaining()) {
+				channel.write(buffer);
+			}
+		} finally {
+			channel.close();
 		}
 	}
 
