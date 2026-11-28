@@ -42,7 +42,8 @@ public class Core {
 	private static int menu_phase = 0;
 	private static long menu_inner_last_y = Long.MIN_VALUE;
 	private static long menu_inner_last_height = Long.MIN_VALUE;
-	private static boolean shutting_down = false;
+	private static boolean ending_app = false;
+	private static DisplayText ending_text;
 	private static List<MenuItem> menu_item_list = new ArrayList<>();
 	private static List<DisplayText> menu_item_text_list = new ArrayList<>();
 	private static DisplayRect menu_cursor;
@@ -113,9 +114,8 @@ public class Core {
 			@Override
 			public void run() {
 				try {
-					shutdown();
+					exit_app();
 				} catch (Exception e) {
-					System.exit(0);
 				}
 			}
 		}));
@@ -160,8 +160,15 @@ public class Core {
 
 	public static void end_app() {
 		runing_app = false;
-		if (shutting_down) {
-			System.exit(0);
+		if (ending_app) {
+			ending_app = false;
+			if (ending_text != null) {
+				try {
+					ending_text.delete();
+				} catch (IOException e) {
+				}
+				ending_text = null;
+			}
 		}
 		show_topmenu();
 	}
@@ -542,23 +549,22 @@ public class Core {
 		menu_cursor.update();
 	}
 
-	//終了する。アプリが動いていればEXITを送り、アプリの終了がend_appに届いたら本体も終わる
-	private static void shutdown() throws IOException {
-		if (shutting_down) return;
-		shutting_down = true;
+	//アプリを終了する。EXITを送り、アプリの終了がend_appに届いたらトップメニューへ戻る(コアは終了しない)
+	private static void exit_app() throws IOException {
+		if (runing_app == false) {
+			close_menu();
+			return;
+		}
+		if (ending_app) return;
+		ending_app = true;
 
 		close_menu();
-		hide_topmenu();
 
 		DisplayText text = new DisplayText(120, Main.display.get_height() / 2, 96, "終了中...", 0x00, 0x00, 0x00, 0xFF);
 		text.set_z(30000);
-		Main.display.create_object(text);
+		ending_text = Main.display.create_object(text);
 
-		if (runing_app) {
-			App.send_exit();
-		} else {
-			System.exit(0);
-		}
+		App.send_exit();
 	}
 
 	private static void open_menu() {
@@ -606,7 +612,7 @@ public class Core {
 	private static void key_receive() throws IOException {
 		Byte keycode = key_queue.poll();
 		if (keycode == null) return;
-		if (shutting_down) return;
+		if (ending_app) return;
 
 		switch (keycode) {
 			case HdmiCec.KEY_POWER: {
