@@ -1,12 +1,24 @@
 package jp.rumi_room.raspberrypi_tv.partymode;
 
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.InetAddress;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
+
+import javax.imageio.ImageIO;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -51,6 +63,64 @@ public class HTTPServer {
 			public void handle(Context ctx) throws Exception {
 				ctx.header("Content-Type", "text/html; charset=UTF-8");
 				ctx.result(Resource.load("/html/index.html").get());
+			}
+		});
+
+		app.get("/api/queue", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				try {
+					List<Map<String, Object>> queue_list = new ArrayList<>();
+
+					for (int i = 0; i < Core.get_play_queue().size(); i++) {
+						PlayItem pi = Core.get_play_queue().get(i);
+
+						Map<String, Object> queue = new HashMap<>();
+						queue.put("ID", pi.get_id());
+						queue.put("ADD_AT", pi.get_add_at().atOffset(ZoneOffset.ofHours(9)).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+						queue.put("ADDER", pi.get_adder().getHostAddress());
+						queue.put("SOURCE", pi.get_type().name());
+						queue.put("CONTENTS_TITLE", pi.get_title());
+						queue.put("CONTENTS_AUTHOR", pi.get_author());
+						queue_list.add(queue);
+					}
+
+					Map<String, Object> result = new HashMap<>();
+					result.put("STATUS", true);
+					result.put("LIST", queue_list);
+
+					ctx.status(200);
+					ctx.header("Content-Type", "text/json; charset=UTF-8");
+					ctx.result(OM.writeValueAsString(result));
+				} catch (Exception ex) {
+					Map<String, Object> error_result = new HashMap<>();
+					error_result.put("STATUS", false);
+
+					StringWriter string_writer = new StringWriter();
+					ex.printStackTrace(new PrintWriter(string_writer));
+					error_result.put("EX", string_writer.toString());
+
+					ctx.status(500);
+					ctx.result(OM.writeValueAsString(error_result));
+				}
+			}
+		});
+
+		app.get("/api/queue/{id}/thumbnail", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				String id = ctx.pathParam("id");
+				Optional<PlayItem> pi = Core.get_playitem_from_id(UUID.fromString(id));
+				if (pi.isEmpty()) {
+					ctx.status(404);
+					ctx.result("{\"STATUS\": false}");
+				}
+
+				BufferedImage image = pi.get().get_thumbnail();
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				ImageIO.write(image, "jpg", baos);
+				ctx.contentType("image/jpeg");
+				ctx.result(baos.toByteArray());
 			}
 		});
 

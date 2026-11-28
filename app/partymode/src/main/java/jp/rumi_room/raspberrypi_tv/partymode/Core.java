@@ -245,8 +245,24 @@ public class Core {
 		play_queue.remove_listener(listener);
 	}
 
+	/**
+	 * プレイリストを取る
+	 */
 	public static ObservableList<PlayItem> get_play_queue() {
 		return play_queue;
+	}
+
+	/**
+	 * プレイアイテムを取る
+	 */
+	public static Optional<PlayItem> get_playitem_from_id(UUID id) {
+		for (int i = 0; i < play_queue.size(); i++) {
+			if (play_queue.get(i).get_id().equals(id)) {
+				return Optional.of(play_queue.get(i));
+			}
+		}
+
+		return Optional.empty();
 	}
 
 	//play_queueの何番目を再生中か(再生していなければ-1)

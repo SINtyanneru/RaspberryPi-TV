@@ -18,18 +18,44 @@
 			<BUTTON onclick="control('next')">次へ</BUTTON>
 			<BUTTON onclick="control('stop')">停止</BUTTON>
 		</DIV>
+		<TABLE ID="QUEUE_LIST"></TABLE>
 	</BODY>
 	<SCRIPT>
 		const seek_bar = document.getElementById("SEEK");
 		let seeking = false;
 
+		window.addEventListener("load", async function() {
+			await reload_queue();
+		});
+
+		async function reload_queue() {
+			let ajax = await fetch("/api/queue");
+			const result = await ajax.json();
+
+			document.getElementById("QUEUE_LIST").replaceChildren();
+
+			for (const item of result.LIST) {
+				let tr = document.createElement("TR");
+
+				let image_td = document.createElement("TD");
+				tr.append(image_td);
+
+				let image = document.createElement("IMG");
+				image_td.append(image);
+				image.src = `/api/queue/${item.ID}/thumbnail`;
+
+				document.getElementById("QUEUE_LIST").append(tr);
+			}
+		}
+
 		//ドラッグ中はSSEの値で上書きしない
-		seek_bar.addEventListener("input", () => {
+		seek_bar.addEventListener("input", function() {
 			seeking = true;
 			document.getElementById("POSITION").textContent = format_time(Number(seek_bar.value));
 		});
+
 		//ドラッグを離したらシークする
-		seek_bar.addEventListener("change", async () => {
+		seek_bar.addEventListener("change", async function() {
 			await fetch("/api/seek", {
 				method: "POST",
 				body: JSON.stringify(
@@ -42,7 +68,8 @@
 		});
 
 		const source = new EventSource("/api/sse");
-		source.addEventListener("playtime", (event) => {
+
+		source.addEventListener("playtime", function(event) {
 			const data = JSON.parse(event.data);
 			document.getElementById("NOW_PLAYING").textContent = data.playing ? data.title : "";
 			seek_bar.max = data.duration_ms;
@@ -51,6 +78,10 @@
 				seek_bar.value = data.position_ms;
 				document.getElementById("POSITION").textContent = format_time(data.position_ms);
 			}
+		});
+
+		source.addEventListener("playqueue", function() {
+			reload_queue();
 		});
 
 		async function control(name) {
