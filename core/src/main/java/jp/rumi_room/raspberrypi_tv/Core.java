@@ -108,6 +108,12 @@ public class Core {
 				}
 			}
 		}));
+		add_menu_item(new MenuItem("終了", new Runnable() {
+			@Override
+			public void run() {
+				System.exit(0);
+			}
+		}));
 
 		//トップメニュー初期化
 		topmenu_category.add(new TopMenuCategory("SETTING", "設定", new ArrayList<>(){{
