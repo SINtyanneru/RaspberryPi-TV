@@ -166,6 +166,13 @@ public class App {
 						}
 					}
 					fb_list.clear();
+
+					//WebUIのWEBPAGEは無(ポート0)を指すようにする
+					ByteArrayOutputStream webpage_baos = new ByteArrayOutputStream();
+					webpage_baos.write(new byte[] { 0x31 });
+					webpage_baos.write(ByteBuffer.allocate(4).putInt(0).array());
+					HTTPServer.ws_queue.put(webpage_baos.toByteArray());
+
 					Core.end_app();
 				} catch (Exception ex) {
 					ex.printStackTrace();

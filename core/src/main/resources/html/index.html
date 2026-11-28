@@ -112,7 +112,12 @@
 					switch (type) {
 						case 0x31: {
 							const port = view.getInt32(1);
-							mel.webpage.src = `${window.location.protocol}//${window.location.host}:${port}/`;
+							if (port == 0) {
+								//アプリが居ないときは無を指す
+								mel.webpage.src = "about:blank";
+							} else {
+								mel.webpage.src = `${window.location.protocol}//${window.location.host}:${port}/`;
+							}
 							return;
 						}
 					}
