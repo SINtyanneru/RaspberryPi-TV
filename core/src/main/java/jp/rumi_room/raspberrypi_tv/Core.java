@@ -16,6 +16,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 import jp.rumi_room.raspberrypi_tv.Tool.QrCode;
 import jp.rumi_room.raspberrypi_tv.Type.AppInfo;
+import jp.rumi_room.raspberrypi_tv.Type.MenuItem;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayFramebuffer;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayRect;
 import jp.rumi_room.raspberrypi_tv.Type.DisplayText;
@@ -41,6 +42,13 @@ public class Core {
 	private static int menu_phase = 0;
 	private static long menu_inner_last_y = Long.MIN_VALUE;
 	private static long menu_inner_last_height = Long.MIN_VALUE;
+	private static List<MenuItem> menu_item_list = new ArrayList<>();
+	private static List<DisplayText> menu_item_text_list = new ArrayList<>();
+	private static DisplayRect menu_cursor;
+	private static int menu_select = 0;
+	private final static long MENU_ITEM_TEXT_SIZE = 40;
+	private final static long MENU_ITEM_PITCH = 76;		//アイテム同士の間隔
+	private final static long MENU_ITEM_X = 40;
 
 	//トップメニュー関係
 	private static boolean topmenu_now = true;
@@ -84,6 +92,22 @@ public class Core {
 		DisplayRect inner = new DisplayRect(0, Main.display.get_height() / 2, menu_width, 0, 0x30, 0x90, 0xFF, 0xB0);
 		inner.set_z(MENU_Z);
 		menu_inner = Main.display.create_object(inner);
+
+		//メニューのカーソル(アイテムのテキストより先に作って下に敷く)
+		DisplayRect cursor = new DisplayRect(0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0x00);
+		cursor.set_z(MENU_Z);
+		menu_cursor = Main.display.create_object(cursor);
+
+		//メニューの既定アイテム
+		add_menu_item(new MenuItem("閉じる", new Runnable() {
+			@Override
+			public void run() {
+				try {
+					close_menu();
+				} catch (IOException e) {
+				}
+			}
+		}));
 
 		//トップメニュー初期化
 		topmenu_category.add(new TopMenuCategory("SETTING", "設定", new ArrayList<>(){{
@@ -450,6 +474,7 @@ public class Core {
 					menu_anim_start = now;
 				} else {
 					menu_animing = false;
+					layout_menu_items();
 				}
 			} else {
 				if (menu_phase == 2) {
@@ -462,6 +487,47 @@ public class Core {
 		}
 	}
 
+	//メニューにアイテムを追加する
+	public static void add_menu_item(MenuItem item) throws IOException {
+		menu_item_list.add(item);
+		DisplayText text = new DisplayText(0, 0, MENU_ITEM_TEXT_SIZE, item.name(), 0xFF, 0xFF, 0xFF, 0x00);
+		text.set_z(MENU_Z);
+		menu_item_text_list.add(Main.display.create_object(text));
+		if (menu_open && menu_animing == false) {
+			layout_menu_items();
+		}
+	}
+
+	//メニューアイテムの配置と表示を今の選択位置に合わせる
+	private static void layout_menu_items() throws IOException {
+		for (int i = 0; i < menu_item_text_list.size(); i++) {
+			DisplayText text = menu_item_text_list.get(i);
+			long y = MENU_INNER_MARGIN + 36 + i * MENU_ITEM_PITCH;
+			text.set_geometry(MENU_ITEM_X, y, MENU_ITEM_TEXT_SIZE);
+			text.set_color(0xFF, 0xFF, 0xFF, 0xFF);
+			text.update();
+		}
+		if (menu_item_text_list.size() > 0) {
+			long cursor_width = text_width(menu_item_list.get(menu_select).name(), MENU_ITEM_TEXT_SIZE) + 32;
+			long cursor_y = MENU_INNER_MARGIN + 36 + menu_select * MENU_ITEM_PITCH - 8;
+			menu_cursor.set_geometry(MENU_ITEM_X - 16, cursor_y, cursor_width, MENU_ITEM_TEXT_SIZE + 16);
+			menu_cursor.set_color(0xFF, 0xFF, 0xFF, 0x40);
+		} else {
+			menu_cursor.set_color(0xFF, 0xFF, 0xFF, 0x00);
+		}
+		menu_cursor.update();
+	}
+
+	//メニューアイテムを隠す
+	private static void hide_menu_items() throws IOException {
+		for (DisplayText text : menu_item_text_list) {
+			text.set_color(0xFF, 0xFF, 0xFF, 0x00);
+			text.update();
+		}
+		menu_cursor.set_color(0xFF, 0xFF, 0xFF, 0x00);
+		menu_cursor.update();
+	}
+
 	private static void open_menu() {
 		if (menu_open) return;
 		menu_open = true;
@@ -471,9 +537,10 @@ public class Core {
 		menu_anim_start = System.currentTimeMillis();
 	}
 
-	private static void close_menu() {
+	private static void close_menu() throws IOException {
 		if (menu_open == false) return;
 		menu_open = false;
+		hide_menu_items();
 		menu_animing = true;
 		menu_anim_open = false;
 		menu_phase = 2;	//閉じるときは逆順に再生
@@ -534,6 +601,14 @@ public class Core {
 			}
 
 			case HdmiCec.KEY_UP: {
+				if (menu_open && menu_animing == false) {
+					if (menu_select > 0) {
+						menu_select--;
+						layout_menu_items();
+					}
+					return;
+				}
+
 				if ((topmenu_now && menu_open == false) && topmenu_select_row > 0) {
 					change_row(topmenu_select_row - 1);
 					return;
@@ -544,6 +619,14 @@ public class Core {
 			}
 
 			case HdmiCec.KEY_DOWN: {
+				if (menu_open && menu_animing == false) {
+					if (menu_select + 1 < menu_item_list.size()) {
+						menu_select++;
+						layout_menu_items();
+					}
+					return;
+				}
+
 				if ((topmenu_now && menu_open == false) && topmenu_select_row + 1 < topmenu_category.get(topmenu_select_col).item_list().size()) {
 					change_row(topmenu_select_row + 1);
 					return;
@@ -554,6 +637,13 @@ public class Core {
 			}
 
 			case HdmiCec.KEY_SELECT: {
+				if (menu_open && menu_animing == false) {
+					if (menu_select < menu_item_list.size()) {
+						menu_item_list.get(menu_select).action().run();
+					}
+					return;
+				}
+
 				if ((topmenu_now && menu_open == false)) {
 					List<TopMenuItem> items = topmenu_category.get(topmenu_select_col).item_list();
 					if (topmenu_select_row < items.size()) {
