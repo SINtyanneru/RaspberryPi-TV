@@ -4,16 +4,24 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayItem;
 import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayerRequest;
@@ -37,6 +45,11 @@ public class Player {
 	private static AtomicReference<UUID> jump_target_id = new AtomicReference<>(null);
 	private static AtomicBoolean paused = new AtomicBoolean(false);
 	private static AtomicReference<PlayerRequest> player_request = new AtomicReference<>(PlayerRequest.None);
+
+	private final static ObjectMapper OM = new ObjectMapper();
+	//再生中アイテムの字幕ストリーム一覧と、選択中の字幕(-1は無し)
+	private static AtomicReference<List<Map<String, Object>>> subtitle_list = new AtomicReference<>(new ArrayList<>());
+	private static AtomicInteger subtitle_selected = new AtomicInteger(-1);
 
 	public static boolean is_pause() {
 		return paused.get();
@@ -143,6 +156,78 @@ public class Player {
 		return playing_id.get();
 	}
 
+	//再生中アイテムの字幕ストリーム一覧を返す
+	public static List<Map<String, Object>> get_subtitle_list() {
+		return subtitle_list.get();
+	}
+
+	//選択中の字幕の番号を返す(無しは-1)
+	public static int get_subtitle_selected() {
+		return subtitle_selected.get();
+	}
+
+	//字幕を選ぶ(-1で無し)。選んだ字幕はSRTへ変換して読み込む
+	public static void set_subtitle(int index) {
+		UUID id = playing_id.get();
+		if (id == null) return;
+
+		if (index < 0) {
+			subtitle_selected.set(-1);
+			Subtitle.clear_cue();
+			notify_position();
+			return;
+		}
+		if (index >= subtitle_list.get().size()) return;
+
+		Optional<PlayItem> item = Core.get_playitem_from_id(id);
+		if (item.isEmpty()) return;
+		PlayItem pi = item.get();
+
+		try {
+			Path srt_path = pi.get_file_path().getParent().resolve("subtitle-" + index + ".srt");
+			if (Files.exists(srt_path) == false) {
+				Process process = new ProcessBuilder("ffmpeg", "-y", "-v", "error", "-i", pi.get_file_path().toString(), "-map", "0:s:" + index, "-c:s", "srt", srt_path.toString()).start();
+				if (process.waitFor() != 0) {
+					return;
+				}
+			}
+			//変換している間に別の動画へ移っていたら適用しない
+			if (id.equals(playing_id.get()) == false) return;
+			Subtitle.set_cue_list(Subtitle.parse_srt(Files.readString(srt_path)));
+			subtitle_selected.set(index);
+		} catch (Exception ex) {
+			return;
+		}
+		notify_position();
+	}
+
+	//再生を始めるアイテムの字幕ストリームを調べる
+	private static void load_subtitles(PlayItem pi) {
+		subtitle_list.set(new ArrayList<>());
+		subtitle_selected.set(-1);
+		Subtitle.clear_cue();
+		try {
+			Process process = new ProcessBuilder("ffprobe", "-v", "error", "-select_streams", "s", "-show_streams", "-of", "json", pi.get_file_path().toString()).start();
+			String json = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			process.waitFor();
+			JsonNode streams = OM.readTree(json).get("streams");
+			List<Map<String, Object>> list = new ArrayList<>();
+			if (streams != null) {
+				for (JsonNode stream : streams) {
+					Map<String, Object> entry = new HashMap<>();
+					entry.put("INDEX", list.size());
+					entry.put("LANGUAGE", stream.path("tags").path("language").asText(""));
+					entry.put("TITLE", stream.path("tags").path("title").asText(""));
+					entry.put("CODEC", stream.path("codec_name").asText(""));
+					list.add(entry);
+				}
+			}
+			subtitle_list.set(list);
+		} catch (Exception ex) {
+		}
+		notify_position();
+	}
+
 	public static long get_position_ms() {
 		return play_position_ms.get();
 	}
@@ -176,6 +261,21 @@ public class Player {
 	}
 
 	public static void main() {
+		//字幕の表示を再生位置に合わせるスレッド
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				while (true) {
+					Subtitle.update(get_position_ms());
+					try {
+						Thread.sleep(50);
+					} catch (InterruptedException e) {
+						return;
+					}
+				}
+			}
+		}).start();
+
 		UUID pending_id = null;
 		while (true) {
 			try {
@@ -209,6 +309,7 @@ public class Player {
 				play_position_ms.set(0);;
 				play_duration_ms.set(probe_duration_ms(pi));;
 				notify_position();
+				load_subtitles(pi);
 
 				int exit_code = 0;
 				long start_offset_ms = 0;
@@ -304,6 +405,9 @@ public class Player {
 				}
 
 				playing_id.set(null);
+				subtitle_list.set(new ArrayList<>());
+				subtitle_selected.set(-1);
+				Subtitle.clear_cue();
 				play_position_ms.set(0);
 				play_duration_ms.set(0);
 				notify_position();

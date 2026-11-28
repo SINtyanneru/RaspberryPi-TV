@@ -46,6 +46,9 @@
 			<BUTTON onclick="control('next')">次へ</BUTTON>
 			<BUTTON onclick="control('stop')">停止</BUTTON>
 		</DIV>
+		<DIV>
+			字幕: <SELECT ID="SUBTITLE" onchange="change_subtitle()"></SELECT>
+		</DIV>
 		<DIV ID="QUEUE_LIST"></DIV>
 	</BODY>
 	<SCRIPT>
@@ -54,6 +57,7 @@
 		let playing_index = -1;
 		let drag_id = null;
 		let drag_index = -1;
+		let subtitle_key = "";
 
 		//SSEで届いたキューの一覧を描画する(表示は上が最新・下が古い)
 		function render_queue(result) {
@@ -215,6 +219,7 @@
 				playing_index = new_playing_index;
 				update_playing_mark();
 			}
+			update_subtitle_selector(data);
 			seek_bar.max = data.duration_ms;
 			document.getElementById("DURATION").textContent = format_time(data.duration_ms);
 			if (!seeking) {
@@ -237,6 +242,47 @@
 		async function queue_action(id, action) {
 			await fetch("/api/queue/" + id + "/" + action, {
 				method: "POST"
+			});
+		}
+
+		//字幕セレクタをSSEの内容に合わせる
+		function update_subtitle_selector(data) {
+			const select = document.getElementById("SUBTITLE");
+			const key = JSON.stringify(data.subtitles);
+			if (key != subtitle_key) {
+				subtitle_key = key;
+				select.replaceChildren();
+				let none_option = document.createElement("OPTION");
+				none_option.value = "-1";
+				none_option.textContent = "なし";
+				select.append(none_option);
+				for (const sub of data.subtitles) {
+					let option = document.createElement("OPTION");
+					option.value = String(sub.INDEX);
+					if (sub.TITLE != "") {
+						option.textContent = sub.TITLE;
+					} else if (sub.LANGUAGE != "") {
+						option.textContent = sub.LANGUAGE;
+					} else {
+						option.textContent = "字幕" + (sub.INDEX + 1);
+					}
+					select.append(option);
+				}
+			}
+			if (document.activeElement != select) {
+				select.value = String(data.subtitle_selected);
+			}
+		}
+
+		async function change_subtitle() {
+			const select = document.getElementById("SUBTITLE");
+			await fetch("/api/subtitle", {
+				method: "POST",
+				body: JSON.stringify(
+					{
+						"INDEX": Number(select.value)
+					}
+				)
 			});
 		}
 

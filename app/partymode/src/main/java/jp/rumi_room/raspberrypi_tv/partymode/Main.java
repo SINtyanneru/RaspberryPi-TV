@@ -11,7 +11,8 @@ import jp.rumi_room.raspberrypi_tv.partymode.Tool.Installer;
 import su.rumishistem.rsdf_java.*;
 
 public class Main {
-	private static CountDownLatch fb_cdl = new CountDownLatch(2);
+	private static CountDownLatch fb_cdl = new CountDownLatch(3);
+	private static int fb_count = 0;
 
 	public static String vide_fb = null;
 	public static int screen_width = 0;
@@ -116,19 +117,31 @@ public class Main {
 						put("H", (long)indicate_height);
 						put("ALPHA", true);
 					}});
+
+					//字幕用(全画面・映像の上に重ねる)
+					send_message(new HashMap<>(){{
+						put("TYPE", "NEW_FB");
+						put("X", 0L);
+						put("Y", 0L);
+						put("W", (long)screen_width);
+						put("H", (long)screen_height);
+						put("ALPHA", true);
+					}});
 					break;
 				}
 
 				case "NEW_FB": {
 					String path = (String)message.get("PATH");
 
-					if (vide_fb == null) {
+					if (fb_count == 0) {
 						vide_fb = path;
-						fb_cdl.countDown();
-					} else {
+					} else if (fb_count == 1) {
 						Indicate.open_fb(path);
-						fb_cdl.countDown();
+					} else {
+						Subtitle.open_fb(path);
 					}
+					fb_count++;
+					fb_cdl.countDown();
 					break;
 				}
 			}

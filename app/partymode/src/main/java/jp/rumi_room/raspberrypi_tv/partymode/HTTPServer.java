@@ -343,6 +343,29 @@ public class HTTPServer {
 			}
 		});
 
+		app.post("/api/subtitle", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				JsonNode root;
+				try {
+					root = OM.readTree(ctx.body());
+				} catch (JsonProcessingException e) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				JsonNode index_node = root.get("INDEX");
+				if (index_node == null) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				Player.set_subtitle(index_node.asInt());
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
 		app.sse("/api/sse", new Consumer<SseClient>() {
 			@Override
 			public void accept(SseClient client) {
@@ -379,6 +402,8 @@ public class HTTPServer {
 							payload.put("index", Core.get_playing_index());
 							payload.put("paused", Player.is_pause());
 							payload.put("title", playing != null ? playing.get_title() : null);
+							payload.put("subtitles", Player.get_subtitle_list());
+							payload.put("subtitle_selected", Player.get_subtitle_selected());
 							payload.put("position_ms", Player.get_position_ms());
 							payload.put("duration_ms", Player.get_duration_ms());
 							client.sendEvent("playtime", OM.writeValueAsString(payload));
