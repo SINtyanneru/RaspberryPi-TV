@@ -55,14 +55,16 @@
 		let drag_id = null;
 		let drag_index = -1;
 
-		//SSEで届いたキューの一覧を描画する
+		//SSEで届いたキューの一覧を描画する(表示は上が最新・下が古い)
 		function render_queue(result) {
 			const queue_list = document.getElementById("QUEUE_LIST");
 			queue_list.replaceChildren();
 
-			for (let i = 0; i < result.LIST.length; i++) {
-				const item = result.LIST[i];
+			const list_length = result.LIST.length;
+			for (let i = 0; i < list_length; i++) {
+				const item = result.LIST[list_length - 1 - i];
 				const index = i;
+				const queue_index = list_length - 1 - i;
 				let item_div = document.createElement("DIV");
 				item_div.className = "QUEUE_ITEM";
 				item_div.draggable = true;
@@ -89,17 +91,18 @@
 
 				let button_div = document.createElement("DIV");
 
+				//画面の上はキューの後方、下は前方にあたる
 				let up_button = document.createElement("BUTTON");
 				up_button.textContent = "↑";
 				up_button.onclick = function() {
-					queue_action(item.ID, "up");
+					queue_move(item.ID, queue_index + 1);
 				};
 				button_div.append(up_button);
 
 				let down_button = document.createElement("BUTTON");
 				down_button.textContent = "↓";
 				down_button.onclick = function() {
-					queue_action(item.ID, "down");
+					queue_move(item.ID, queue_index - 1);
 				};
 				button_div.append(down_button);
 
@@ -149,7 +152,8 @@
 						target--;
 					}
 					if (drag_id != null && target != drag_index) {
-						queue_move(drag_id, target);
+						//画面の位置からキューの位置へ直して送る
+						queue_move(drag_id, list_length - 1 - target);
 					}
 					clear_drop_marks();
 				});
@@ -173,7 +177,8 @@
 		function update_playing_mark() {
 			const queue_list = document.getElementById("QUEUE_LIST");
 			for (let i = 0; i < queue_list.children.length; i++) {
-				if (i == playing_index) {
+				//表示は上が最新なので、キューの位置は逆向きに数える
+				if (queue_list.children.length - 1 - i == playing_index) {
 					queue_list.children[i].classList.add("playing");
 				} else {
 					queue_list.children[i].classList.remove("playing");
