@@ -20,14 +20,14 @@ public class Core {
 	private final static ObjectMapper JSON_MAPPER = new ObjectMapper();
 
 	private static Font font;
-	private static PlayItem download_current_item = null;
+	private static UUID download_current_id = null;
 	private static int download_current_percent = 0;
 	private static int download_title_scroll = 0;
 	private static String indicate_error_text = null;
 	private static long indicate_error_until = 0;
 
 	private static ObservableList<PlayItem> play_queue = new ObservableList<>();
-	private static BlockingQueue<PlayItem> download_queue = new ArrayBlockingQueue<>(100);
+	private static BlockingQueue<UUID> download_queue = new ArrayBlockingQueue<>(100);
 
 	public static void main() throws InterruptedException {
 		try {
@@ -48,7 +48,7 @@ public class Core {
 							clear_indicate();
 						}
 					}
-					if (download_current_item != null) {
+					if (download_current_id != null) {
 						download_title_scroll += 2;
 						draw_indicate();
 					}
@@ -70,7 +70,12 @@ public class Core {
 		}).start();
 
 		while (true) {
-			PlayItem pi = download_queue.take();
+			UUID download_id = download_queue.take();
+
+			//キューから削除されていたらダウンロードしない
+			Optional<PlayItem> download_item = get_playitem_from_id(download_id);
+			if (download_item.isEmpty()) continue;
+			PlayItem pi = download_item.get();
 			if (pi.get_type() != PlayItemType.YoutubeVideo) continue;
 
 			try {
@@ -78,11 +83,11 @@ public class Core {
 				if (Files.exists(cache_dir.resolve("video.mkv"))) {
 					pi.set_downloaded(true);
 					send_log("再生キューに追加(キャッシュ済み): " + pi.get_title());
-					Player.add_wait_queue(pi);
+					Player.add_wait_queue(pi.get_id());
 					continue;
 				}
 
-				download_current_item = pi;
+				download_current_id = pi.get_id();
 				download_current_percent = 0;
 				download_title_scroll = 0;
 				boolean ok = YtDlp.download(pi.get_url(), cache_dir.toFile(), "video", new ArrayList<>(), new YtDlp.ProgressListener() {
@@ -94,7 +99,7 @@ public class Core {
 					}
 				});
 
-				download_current_item = null;
+				download_current_id = null;
 				clear_indicate();
 
 				if (ok == false) {
@@ -107,9 +112,9 @@ public class Core {
 				pi.set_downloaded(true);
 
 				send_log("再生キューに追加: " + pi.get_title());
-				Player.add_wait_queue(pi);
+				Player.add_wait_queue(pi.get_id());
 			} catch (Exception ex) {
-				download_current_item = null;
+				download_current_id = null;
 				StringWriter string_writer = new StringWriter();
 				ex.printStackTrace(new PrintWriter(string_writer));
 				send_log(string_writer.toString());
@@ -159,10 +164,15 @@ public class Core {
 	}
 
 	private static synchronized void draw_indicate() {
-		PlayItem pi = download_current_item;
-		if (pi == null) {
+		if (download_current_id == null) {
 			return;
 		}
+		//キューから削除されていたら描かない
+		Optional<PlayItem> item = get_playitem_from_id(download_current_id);
+		if (item.isEmpty()) {
+			return;
+		}
+		PlayItem pi = item.get();
 		int percent = download_current_percent;
 
 		Indicate.get_g().setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
@@ -265,13 +275,110 @@ public class Core {
 		return Optional.empty();
 	}
 
+	//指定したIDの次にあるアイテムを取る(無ければ空)
+	public static Optional<PlayItem> get_next_playitem(UUID id) {
+		for (int i = 0; i < play_queue.size(); i++) {
+			if (play_queue.get(i).get_id().equals(id)) {
+				if (i + 1 < play_queue.size()) {
+					return Optional.of(play_queue.get(i + 1));
+				}
+				return Optional.empty();
+			}
+		}
+		return Optional.empty();
+	}
+
+	//指定したIDの前にあるアイテムを取る(無ければ空)
+	public static Optional<PlayItem> get_prev_playitem(UUID id) {
+		for (int i = 0; i < play_queue.size(); i++) {
+			if (play_queue.get(i).get_id().equals(id)) {
+				if (i - 1 >= 0) {
+					return Optional.of(play_queue.get(i - 1));
+				}
+				return Optional.empty();
+			}
+		}
+		return Optional.empty();
+	}
+
 	//play_queueの何番目を再生中か(再生していなければ-1)
 	public static int get_playing_index() {
-		PlayItem playing = Player.get_playing();
-		if (playing == null) {
+		UUID playing_id = Player.get_playing_id();
+		if (playing_id == null) {
 			return -1;
 		}
-		return play_queue.index_of(playing);
+		for (int i = 0; i < play_queue.size(); i++) {
+			if (play_queue.get(i).get_id().equals(playing_id)) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	//キューからアイテムを削除する(再生中なら次を再生し、次が無ければ停止する)
+	public static boolean delete_playitem(UUID id) {
+		int index = -1;
+		for (int i = 0; i < play_queue.size(); i++) {
+			if (play_queue.get(i).get_id().equals(id)) {
+				index = i;
+				break;
+			}
+		}
+		if (index < 0) {
+			return false;
+		}
+
+		//削除するアイテムの次にあったアイテム(再生中を消した時の移動先)
+		UUID next_id = null;
+		if (index + 1 < play_queue.size()) {
+			next_id = play_queue.get(index + 1).get_id();
+		}
+		boolean is_playing = id.equals(Player.get_playing_id());
+
+		play_queue.remove(index);
+		download_queue.remove(id);
+		Player.remove_wait_queue(id);
+
+		if (is_playing) {
+			if (next_id != null) {
+				Player.jump_to(next_id);
+			} else {
+				Player.stop();
+			}
+		}
+		return true;
+	}
+
+	//キューのアイテムを1つ前と入れ替える
+	public static boolean move_playitem_up(UUID id) {
+		return move_playitem(id, -1);
+	}
+
+	//キューのアイテムを1つ後と入れ替える
+	public static boolean move_playitem_down(UUID id) {
+		return move_playitem(id, 1);
+	}
+
+	private static boolean move_playitem(UUID id, int delta) {
+		int index = -1;
+		for (int i = 0; i < play_queue.size(); i++) {
+			if (play_queue.get(i).get_id().equals(id)) {
+				index = i;
+				break;
+			}
+		}
+		if (index < 0) {
+			return false;
+		}
+		int target = index + delta;
+		if (target < 0 || target >= play_queue.size()) {
+			return false;
+		}
+		PlayItem item = play_queue.get(index);
+		PlayItem target_item = play_queue.get(target);
+		play_queue.set(index, target_item);
+		play_queue.set(target, item);
+		return true;
 	}
 
 	public static boolean add_play(String input_url, InetAddress adder) throws Exception{
@@ -362,7 +469,7 @@ public class Core {
 			);
 
 			play_queue.add(pi);
-			download_queue.add(pi);
+			download_queue.add(pi.get_id());
 
 			return true;
 		}

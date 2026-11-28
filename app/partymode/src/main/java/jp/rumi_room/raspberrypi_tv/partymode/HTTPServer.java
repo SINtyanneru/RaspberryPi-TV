@@ -59,6 +59,15 @@ public class HTTPServer {
 		return OM.writeValueAsString(result);
 	}
 
+	//パスパラメータのIDをUUIDとして読む(読めなければnull)
+	private static UUID parse_id(Context ctx) {
+		try {
+			return UUID.fromString(ctx.pathParam("id"));
+		} catch (IllegalArgumentException ex) {
+			return null;
+		}
+	}
+
 	//playqueueイベントでキューの一覧を送る
 	private static void send_playqueue(SseClient client) {
 		try {
@@ -144,6 +153,63 @@ public class HTTPServer {
 				ImageIO.write(image, "jpg", baos);
 				ctx.contentType("image/jpeg");
 				ctx.result(baos.toByteArray());
+			}
+		});
+
+		app.post("/api/queue/{id}/delete", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				UUID id = parse_id(ctx);
+				if (id == null) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				if (Core.delete_playitem(id) == false) {
+					ctx.status(404);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
+		app.post("/api/queue/{id}/up", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				UUID id = parse_id(ctx);
+				if (id == null) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				if (Core.move_playitem_up(id) == false) {
+					ctx.status(404);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
+		app.post("/api/queue/{id}/down", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				UUID id = parse_id(ctx);
+				if (id == null) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				if (Core.move_playitem_down(id) == false) {
+					ctx.status(404);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
 			}
 		});
 
@@ -274,8 +340,9 @@ public class HTTPServer {
 					public void on_update() {
 						try {
 							Map<String, Object> payload = new HashMap<>();
-							PlayItem playing = Player.get_playing();
-							payload.put("playing", playing != null);
+							UUID playing_id = Player.get_playing_id();
+							PlayItem playing = playing_id != null ? Core.get_playitem_from_id(playing_id).orElse(null) : null;
+							payload.put("playing", playing_id != null);
 							payload.put("index", Core.get_playing_index());
 							payload.put("paused", Player.is_pause());
 							payload.put("title", playing != null ? playing.get_title() : null);

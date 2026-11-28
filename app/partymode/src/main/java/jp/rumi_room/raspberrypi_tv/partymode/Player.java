@@ -7,6 +7,8 @@ import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -17,7 +19,7 @@ import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayItem;
 import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayerRequest;
 
 public class Player {
-	private static LinkedBlockingDeque<PlayItem> play_wait_queue = new LinkedBlockingDeque<>(100);
+	private static LinkedBlockingDeque<UUID> play_wait_queue = new LinkedBlockingDeque<>(100);
 
 	//再生位置の変化の通知先(SSE配信用)
 	public interface PositionListener {
@@ -26,12 +28,13 @@ public class Player {
 
 	private static List<PositionListener> position_listener_list = new CopyOnWriteArrayList<>();
 
-	private static AtomicReference<PlayItem> playing_item = new AtomicReference<>(null);
+	private static AtomicReference<UUID> playing_id = new AtomicReference<>(null);
 	private static AtomicLong play_position_ms = new AtomicLong(0);
 	private static AtomicLong play_duration_ms = new AtomicLong(0);
 	private static AtomicReference<Process> playing_process = new AtomicReference<>(null);
 	private static AtomicLong seek_request_ms = new AtomicLong(-1);
-	private static AtomicReference<PlayItem> prev_item = new AtomicReference<>(null);
+	//次に再生するアイテムの指定(次へ・前へ・再生中のアイテムが削除された時に使う)
+	private static AtomicReference<UUID> jump_target_id = new AtomicReference<>(null);
 	private static AtomicBoolean paused = new AtomicBoolean(false);
 	private static AtomicReference<PlayerRequest> player_request = new AtomicReference<>(PlayerRequest.None);
 
@@ -51,7 +54,7 @@ public class Player {
 
 	//指定位置へシークする(再生中のffmpegを落として、次ループで-ss付きで起動し直す)
 	public static void seek(long position_ms) {
-		if (playing_item.get() == null || playing_process.get() == null) {
+		if (playing_id.get() == null || playing_process.get() == null) {
 			return;
 		}
 		if (position_ms < 0) {
@@ -90,30 +93,40 @@ public class Player {
 	//停止する(再生中を落とし、待ちキューも空にする)
 	public static void stop() {
 		player_request.set(PlayerRequest.Stop);
+		jump_target_id.set(null);
 		play_wait_queue.clear();
 		kill_playing();
 	}
 
-	//次の動画へ進む(play_queue上で次が無ければ何もしない)
+	//次の動画へ進む(再生中のIDからキュー上の次を探し、無ければ何もしない)
 	public static void next() {
-		if (playing_item.get() == null) return;
+		UUID id = playing_id.get();
+		if (id == null) return;
 
-		int index = Core.get_playing_index();
-		if (index < 0 || index >= Core.get_play_queue().size() - 1) return;
+		Optional<PlayItem> next = Core.get_next_playitem(id);
+		if (next.isEmpty()) return;
 
-		player_request.set(PlayerRequest.Next);
+		jump_target_id.set(next.get().get_id());
 		kill_playing();
 	}
 
-	//前の動画へ戻る(前の動画が無ければ先頭から再生し直す)
+	//前の動画へ戻る(再生中のIDからキュー上の前を探し、無ければ先頭から再生し直す)
 	public static void prev() {
-		if (playing_item.get() == null) return;
+		UUID id = playing_id.get();
+		if (id == null) return;
 
-		if (prev_item.get() == null) {
+		Optional<PlayItem> prev = Core.get_prev_playitem(id);
+		if (prev.isEmpty()) {
 			seek(0);
 			return;
 		}
-		player_request.set(PlayerRequest.Prev);
+		jump_target_id.set(prev.get().get_id());
+		kill_playing();
+	}
+
+	//指定したアイテムへ再生を移す(再生中のアイテムが削除された時など)
+	public static void jump_to(UUID id) {
+		jump_target_id.set(id);
 		kill_playing();
 	}
 
@@ -125,9 +138,9 @@ public class Player {
 		position_listener_list.remove(listener);
 	}
 
-	//再生中の動画を返す(再生していなければnull)
-	public static PlayItem get_playing() {
-		return playing_item.get();
+	//再生中の動画のIDを返す(再生していなければnull)
+	public static UUID get_playing_id() {
+		return playing_id.get();
 	}
 
 	public static long get_position_ms() {
@@ -163,9 +176,28 @@ public class Player {
 	}
 
 	public static void main() {
+		UUID pending_id = null;
 		while (true) {
 			try {
-				PlayItem pi = play_wait_queue.take();
+				UUID id;
+				if (pending_id != null) {
+					id = pending_id;
+					pending_id = null;
+				} else {
+					id = play_wait_queue.take();
+				}
+
+				//キューから削除されていたら再生しない
+				Optional<PlayItem> item = Core.get_playitem_from_id(id);
+				if (item.isEmpty()) {
+					continue;
+				}
+				PlayItem pi = item.get();
+
+				//まだダウンロードが終わっていなければ、完了時に待ちキューへ入り直すので待つ
+				if (pi.get_downloaded() == false) {
+					continue;
+				}
 
 				Main.send_message(new HashMap<>(){{
 					put("TYPE", "LOG");
@@ -173,7 +205,7 @@ public class Player {
 				}});
 
 				//再生状態を公開する(SSEで配信するため)
-				playing_item.set(pi);;
+				playing_id.set(pi.get_id());;
 				play_position_ms.set(0);;
 				play_duration_ms.set(probe_duration_ms(pi));;
 				notify_position();
@@ -245,24 +277,15 @@ public class Player {
 					if (player_request.get() == PlayerRequest.Stop) {
 						player_request.set(PlayerRequest.None);
 						seek_request_ms.set(-1);
-						prev_item.set(null);
+						jump_target_id.set(null);
 						break;
 					}
-					//次へ
-					if (player_request.get() == PlayerRequest.Next) {
-						player_request.set(PlayerRequest.None);
+					//次に再生する指定が来ていたら、それを再生する(次へ・前へ・再生中の削除)
+					UUID jump_id = jump_target_id.getAndSet(null);
+					if (jump_id != null) {
 						seek_request_ms.set(-1);
-						prev_item.set(pi);
-						break;
-					}
-					//前へ(今の動画は、前の動画の次に再生し直す)
-					if (player_request.get() == PlayerRequest.Prev) {
-						player_request.set(PlayerRequest.None);
-						seek_request_ms.set(-1);
-						PlayItem back = prev_item.get();
-						play_wait_queue.offerFirst(pi);
-						play_wait_queue.offerFirst(back);
-						prev_item.set(pi);
+						play_wait_queue.remove(jump_id);
+						pending_id = jump_id;
 						break;
 					}
 					//シーク要求が来ていたら、同じ動画を指定位置から再生し直す
@@ -271,12 +294,16 @@ public class Player {
 						seek_request_ms.set(-1);
 						continue;
 					}
-					//自然に終わった
-					prev_item.set(pi);
+					//自然に終わった(キュー上で次があり、ダウンロード済みなら続けて再生する)
+					Optional<PlayItem> next = Core.get_next_playitem(pi.get_id());
+					if (next.isPresent() && next.get().get_downloaded()) {
+						play_wait_queue.remove(next.get().get_id());
+						pending_id = next.get().get_id();
+					}
 					break;
 				}
 
-				playing_item.set(null);
+				playing_id.set(null);
 				play_position_ms.set(0);
 				play_duration_ms.set(0);
 				notify_position();
@@ -300,7 +327,12 @@ public class Player {
 		}
 	}
 
-	public static void add_wait_queue(PlayItem pi) throws InterruptedException {
-		play_wait_queue.putLast(pi);
+	public static void add_wait_queue(UUID id) throws InterruptedException {
+		play_wait_queue.putLast(id);
+	}
+
+	//待ちキューから取り除く(キューから削除された時など)
+	public static void remove_wait_queue(UUID id) {
+		play_wait_queue.remove(id);
 	}
 }

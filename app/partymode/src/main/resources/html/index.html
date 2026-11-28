@@ -69,6 +69,31 @@
 
 				item_div.append(text_div);
 
+				let button_div = document.createElement("DIV");
+
+				let up_button = document.createElement("BUTTON");
+				up_button.textContent = "↑";
+				up_button.onclick = function() {
+					queue_action(item.ID, "up");
+				};
+				button_div.append(up_button);
+
+				let down_button = document.createElement("BUTTON");
+				down_button.textContent = "↓";
+				down_button.onclick = function() {
+					queue_action(item.ID, "down");
+				};
+				button_div.append(down_button);
+
+				let delete_button = document.createElement("BUTTON");
+				delete_button.textContent = "削除";
+				delete_button.onclick = function() {
+					queue_action(item.ID, "delete");
+				};
+				button_div.append(delete_button);
+
+				item_div.append(button_div);
+
 				queue_list.append(item_div);
 			}
 
@@ -130,6 +155,13 @@
 
 		async function control(name) {
 			await fetch("/api/" + name, {
+				method: "POST"
+			});
+		}
+
+		//キューの編集(結果はSSEのplayqueueで反映される)
+		async function queue_action(id, action) {
+			await fetch("/api/queue/" + id + "/" + action, {
 				method: "POST"
 			});
 		}
