@@ -169,6 +169,12 @@ public class App {
 		}).start();
 	}
 
+	public static void send_exit() throws IOException {
+		send_message(new HashMap<>(){{
+			put("TYPE", "EXIT");
+		}});
+	}
+
 	public static void send_key(byte keycode) throws IOException {
 		send_message(new HashMap<>(){{
 			put("TYPE", "EVENT_KEY");

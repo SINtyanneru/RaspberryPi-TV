@@ -130,6 +130,11 @@ public class Main {
 					break;
 				}
 
+				case "EXIT": {
+					System.exit(0);
+					break;
+				}
+
 				case "NEW_FB": {
 					String path = (String)message.get("PATH");
 

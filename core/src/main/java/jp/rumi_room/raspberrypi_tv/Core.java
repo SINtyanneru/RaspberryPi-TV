@@ -42,6 +42,7 @@ public class Core {
 	private static int menu_phase = 0;
 	private static long menu_inner_last_y = Long.MIN_VALUE;
 	private static long menu_inner_last_height = Long.MIN_VALUE;
+	private static boolean shutting_down = false;
 	private static List<MenuItem> menu_item_list = new ArrayList<>();
 	private static List<DisplayText> menu_item_text_list = new ArrayList<>();
 	private static DisplayRect menu_cursor;
@@ -111,7 +112,11 @@ public class Core {
 		add_menu_item(new MenuItem("終了", new Runnable() {
 			@Override
 			public void run() {
-				System.exit(0);
+				try {
+					shutdown();
+				} catch (Exception e) {
+					System.exit(0);
+				}
 			}
 		}));
 
@@ -155,6 +160,9 @@ public class Core {
 
 	public static void end_app() {
 		runing_app = false;
+		if (shutting_down) {
+			System.exit(0);
+		}
 		show_topmenu();
 	}
 
@@ -534,6 +542,25 @@ public class Core {
 		menu_cursor.update();
 	}
 
+	//終了する。アプリが動いていればEXITを送り、アプリの終了がend_appに届いたら本体も終わる
+	private static void shutdown() throws IOException {
+		if (shutting_down) return;
+		shutting_down = true;
+
+		close_menu();
+		hide_topmenu();
+
+		DisplayText text = new DisplayText(120, Main.display.get_height() / 2, 96, "終了中...", 0x00, 0x00, 0x00, 0xFF);
+		text.set_z(30000);
+		Main.display.create_object(text);
+
+		if (runing_app) {
+			App.send_exit();
+		} else {
+			System.exit(0);
+		}
+	}
+
 	private static void open_menu() {
 		if (menu_open) return;
 		menu_open = true;
@@ -579,6 +606,7 @@ public class Core {
 	private static void key_receive() throws IOException {
 		Byte keycode = key_queue.poll();
 		if (keycode == null) return;
+		if (shutting_down) return;
 
 		switch (keycode) {
 			case HdmiCec.KEY_POWER: {
