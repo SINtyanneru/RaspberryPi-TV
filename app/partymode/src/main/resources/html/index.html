@@ -2,6 +2,22 @@
 <HTML>
 	<HEAD>
 		<TITLE></TITLE>
+		<STYLE>
+			.QUEUE_ITEM {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				margin: 4px 0;
+			}
+			.QUEUE_ITEM IMG {
+				width: 160px;
+				height: 90px;
+				object-fit: cover;
+			}
+			.QUEUE_ITEM.playing {
+				background: rgba(48, 144, 255, 0.25);
+			}
+		</STYLE>
 	</HEAD>
 	<BODY>
 		<H1>Watch Together</H1>
@@ -18,33 +34,56 @@
 			<BUTTON onclick="control('next')">次へ</BUTTON>
 			<BUTTON onclick="control('stop')">停止</BUTTON>
 		</DIV>
-		<TABLE ID="QUEUE_LIST"></TABLE>
+		<DIV ID="QUEUE_LIST"></DIV>
 	</BODY>
 	<SCRIPT>
 		const seek_bar = document.getElementById("SEEK");
 		let seeking = false;
+		let playing_index = -1;
 
-		window.addEventListener("load", async function() {
-			await reload_queue();
-		});
-
-		async function reload_queue() {
-			let ajax = await fetch("/api/queue");
-			const result = await ajax.json();
-
-			document.getElementById("QUEUE_LIST").replaceChildren();
+		//SSEで届いたキューの一覧を描画する
+		function render_queue(result) {
+			const queue_list = document.getElementById("QUEUE_LIST");
+			queue_list.replaceChildren();
 
 			for (const item of result.LIST) {
-				let tr = document.createElement("TR");
-
-				let image_td = document.createElement("TD");
-				tr.append(image_td);
+				let item_div = document.createElement("DIV");
+				item_div.className = "QUEUE_ITEM";
 
 				let image = document.createElement("IMG");
-				image_td.append(image);
 				image.src = `/api/queue/${item.ID}/thumbnail`;
+				image.onerror = function() {
+					image.style.visibility = "hidden";
+				};
+				item_div.append(image);
 
-				document.getElementById("QUEUE_LIST").append(tr);
+				let text_div = document.createElement("DIV");
+
+				let title_div = document.createElement("DIV");
+				title_div.textContent = item.CONTENTS_TITLE;
+				text_div.append(title_div);
+
+				let author_div = document.createElement("DIV");
+				author_div.textContent = item.CONTENTS_AUTHOR;
+				text_div.append(author_div);
+
+				item_div.append(text_div);
+
+				queue_list.append(item_div);
+			}
+
+			update_playing_mark();
+		}
+
+		//再生中の行にplayingクラスを付ける
+		function update_playing_mark() {
+			const queue_list = document.getElementById("QUEUE_LIST");
+			for (let i = 0; i < queue_list.children.length; i++) {
+				if (i == playing_index) {
+					queue_list.children[i].classList.add("playing");
+				} else {
+					queue_list.children[i].classList.remove("playing");
+				}
 			}
 		}
 
@@ -72,6 +111,11 @@
 		source.addEventListener("playtime", function(event) {
 			const data = JSON.parse(event.data);
 			document.getElementById("NOW_PLAYING").textContent = data.playing ? data.title : "";
+			const new_playing_index = data.playing ? data.index : -1;
+			if (new_playing_index != playing_index) {
+				playing_index = new_playing_index;
+				update_playing_mark();
+			}
 			seek_bar.max = data.duration_ms;
 			document.getElementById("DURATION").textContent = format_time(data.duration_ms);
 			if (!seeking) {
@@ -80,8 +124,8 @@
 			}
 		});
 
-		source.addEventListener("playqueue", function() {
-			reload_queue();
+		source.addEventListener("playqueue", function(event) {
+			render_queue(JSON.parse(event.data));
 		});
 
 		async function control(name) {

@@ -35,6 +35,38 @@ public class HTTPServer {
 
 	private static CountDownLatch cdl = new CountDownLatch(1);
 
+	//キューの一覧をJSON文字列で組み立てる(/api/queueとSSEのplayqueueで共用)
+	private static String build_queue_json() throws JsonProcessingException {
+		List<Map<String, Object>> queue_list = new ArrayList<>();
+
+		for (int i = 0; i < Core.get_play_queue().size(); i++) {
+			PlayItem pi = Core.get_play_queue().get(i);
+
+			Map<String, Object> queue = new HashMap<>();
+			queue.put("ID", pi.get_id());
+			queue.put("ADD_AT", pi.get_add_at().atOffset(ZoneOffset.ofHours(9)).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+			queue.put("ADDER", pi.get_adder().getHostAddress());
+			queue.put("SOURCE", pi.get_type().name());
+			queue.put("CONTENTS_TITLE", pi.get_title());
+			queue.put("CONTENTS_AUTHOR", pi.get_author());
+			queue_list.add(queue);
+		}
+
+		Map<String, Object> result = new HashMap<>();
+		result.put("STATUS", true);
+		result.put("LIST", queue_list);
+
+		return OM.writeValueAsString(result);
+	}
+
+	//playqueueイベントでキューの一覧を送る
+	private static void send_playqueue(SseClient client) {
+		try {
+			client.sendEvent("playqueue", build_queue_json());
+		} catch (Exception ex) {
+		}
+	}
+
 	public static void start() {
 		try {
 			start_server();
@@ -70,28 +102,9 @@ public class HTTPServer {
 			@Override
 			public void handle(Context ctx) throws Exception {
 				try {
-					List<Map<String, Object>> queue_list = new ArrayList<>();
-
-					for (int i = 0; i < Core.get_play_queue().size(); i++) {
-						PlayItem pi = Core.get_play_queue().get(i);
-
-						Map<String, Object> queue = new HashMap<>();
-						queue.put("ID", pi.get_id());
-						queue.put("ADD_AT", pi.get_add_at().atOffset(ZoneOffset.ofHours(9)).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
-						queue.put("ADDER", pi.get_adder().getHostAddress());
-						queue.put("SOURCE", pi.get_type().name());
-						queue.put("CONTENTS_TITLE", pi.get_title());
-						queue.put("CONTENTS_AUTHOR", pi.get_author());
-						queue_list.add(queue);
-					}
-
-					Map<String, Object> result = new HashMap<>();
-					result.put("STATUS", true);
-					result.put("LIST", queue_list);
-
 					ctx.status(200);
 					ctx.header("Content-Type", "text/json; charset=UTF-8");
-					ctx.result(OM.writeValueAsString(result));
+					ctx.result(build_queue_json());
 				} catch (Exception ex) {
 					Map<String, Object> error_result = new HashMap<>();
 					error_result.put("STATUS", false);
@@ -230,18 +243,20 @@ public class HTTPServer {
 				final ObservableList.ChangeListener<PlayItem> listener = new ObservableList.ChangeListener<PlayItem>() {
 					@Override
 					public void on_add(int index, PlayItem element) {
-						client.sendEvent("playqueue", "{}");
+						send_playqueue(client);
 					}
 					@Override
 					public void on_remove(int index, PlayItem element) {
-						client.sendEvent("playqueue", "{}");
+						send_playqueue(client);
 					}
 					@Override
 					public void on_set(int index, PlayItem old_element, PlayItem new_element) {
-						client.sendEvent("playqueue", "{}");
+						send_playqueue(client);
 					}
 				};
 				Core.add_playqueue_listener(listener);
+				//接続直後に現在のキューを1回送る
+				send_playqueue(client);
 
 				//再生位置の変化をplaytimeイベントで流す
 				final Player.PositionListener position_listener = new Player.PositionListener() {
