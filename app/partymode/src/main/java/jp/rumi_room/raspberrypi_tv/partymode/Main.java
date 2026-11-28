@@ -135,6 +135,35 @@ public class Main {
 					break;
 				}
 
+				case "EVENT_KEY": {
+					//WebUIのリモコンとHDMI-CECで共通のキーコード
+					int keycode = ((Number)message.get("KEYCODE")).intValue();
+					switch (keycode) {
+						case 0x44:	//▶ 再生
+							Player.play();
+							break;
+						case 0x46:	//⏸ 一時停止
+							Player.pause();
+							break;
+						case 0x45:	//⏹ 停止
+							Player.stop();
+							break;
+						case 0x4B:	//⏭ 次へ
+							Player.next();
+							break;
+						case 0x4C:	//⏮ 前へ
+							Player.prev();
+							break;
+						case 0x48:	//⏪ 30秒戻し
+							Player.seek(Math.max(0, Player.get_position_ms() - 30000));
+							break;
+						case 0x49:	//⏩ 30秒送り
+							Player.seek(Player.get_position_ms() + 30000);
+							break;
+					}
+					break;
+				}
+
 				case "NEW_FB": {
 					String path = (String)message.get("PATH");
 
