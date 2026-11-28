@@ -713,6 +713,10 @@ public class Core {
 				open_menu();
 				return;
 			}
+
+			default: {
+				if (runing_app) App.send_key(keycode);
+			}
 		}
 	}
 }

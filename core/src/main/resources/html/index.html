@@ -2,35 +2,84 @@
 <HTML>
 	<HEAD>
 		<TITLE>RaspberryPi TV</TITLE>
+
+		<LINK REL="stylesheet" HREF="https://rumishistem.co.jp/design/rumishistem.css">
+
+		<STYLE>
+			.TITLE{
+				height: 48px;
+
+				padding-left: 10px;
+			}
+
+			.MAIN{
+				width: 100vw;
+				height: calc(100vh - 48px);
+
+				display: flex;
+				flex-direction: row;
+
+				padding: 10px;
+			}
+
+			.CONTROL{
+				flex: 1;
+
+				height: fit-content;
+			}
+
+			.WEBPAGE{
+				flex: 9;
+			}
+
+			button{
+				width: 45px;
+				height: 45px;
+			}
+		</STYLE>
 	</HEAD>
 	<BODY>
-		<H1>RaspberryPi TV</H1>
-		<TABLE>
-			<TR>
-				<TD><BUTTON onclick="send_keycode(0x40)">電源</BUTTON></TD>
-			</TR>
-			<TR>
-				<TD COLSPAN="2"></TD>
-				<TD><BUTTON STYLE="width: 100%;" onclick="send_keycode(0x01)">↑</BUTTON></TD>
-			</TR>
-			<TR>
-				<TD></TD>
-				<TD><BUTTON onclick="send_keycode(0x03)">←</BUTTON></TD>
-				<TD><BUTTON onclick="send_keycode(0x00)">O</BUTTON></TD>
-				<TD><BUTTON onclick="send_keycode(0x04)">→</BUTTON></TD>
-			</TR>
-			<TR>
-				<TD COLSPAN="2"></TD>
-				<TD><BUTTON STYLE="width: 100%;" onclick="send_keycode(0x02)">↓</BUTTON></TD>
-			</TR>
-			<TR>
-				<TD COLSPAN="2"><BUTTON onclick="send_keycode(0x71)">戻る</BUTTON></TD>
-				<TD></TD>
-				<TD COLSPAN="2"><BUTTON onclick="send_keycode(0x72)">メニュー</BUTTON></TD>
-			</TR>
-		</TABLE>
+		<H1 CLASS="TITLE">RaspberryPi TV</H1>
+		<DIV CLASS="MAIN">
+			<TABLE CLASS="CONTROL">
+				<TR>
+					<TD><BUTTON onclick="send_keycode(0x40)">電</BUTTON></TD>
+				</TR>
+				<TR>
+					<TD COLSPAN="2"></TD>
+					<TD><BUTTON onclick="send_keycode(0x01)">↑</BUTTON></TD>
+				</TR>
+				<TR>
+					<TD></TD>
+					<TD><BUTTON onclick="send_keycode(0x03)">←</BUTTON></TD>
+					<TD><BUTTON onclick="send_keycode(0x00)">O</BUTTON></TD>
+					<TD><BUTTON onclick="send_keycode(0x04)">→</BUTTON></TD>
+				</TR>
+				<TR>
+					<TD COLSPAN="2"></TD>
+					<TD><BUTTON onclick="send_keycode(0x02)">↓</BUTTON></TD>
+				</TR>
+				<TR>
+					<TD COLSPAN="2"><BUTTON STYLE="width: 100px;" onclick="send_keycode(0x71)">戻る</BUTTON></TD>
+					<TD></TD>
+					<TD COLSPAN="2"><BUTTON STYLE="width: 100px;" onclick="send_keycode(0x72)">メニュー</BUTTON></TD>
+				</TR>
+				<TR>
+					<TD><BUTTON onclick="send_keycode(0x4C)">⏮</BUTTON></TD>
+					<TD><BUTTON onclick="send_keycode(0x48)">⏪</BUTTON></TD>
+					<TD><BUTTON onclick="send_keycode(0x44)">▶</BUTTON></TD>
+					<TD><BUTTON onclick="send_keycode(0x49)">⏩</BUTTON></TD>
+					<TD><BUTTON onclick="send_keycode(0x4B)">⏭</BUTTON></TD>
+				</TR>
+				<TR>
+					<TD COLSPAN="1"></TD>
+					<TD><BUTTON onclick="send_keycode(0x45)">⏹</BUTTON></TD>
+					<TD><BUTTON onclick="send_keycode(0x46)">⏸</BUTTON></TD>
+				</TR>
+			</TABLE>
 
-		<IFRAME ID="WEBPAGE"></IFRAME>
+			<IFRAME CLASS="WEBPAGE" ID="WEBPAGE"></IFRAME>
+		</DIV>
 	</BODY>
 	<SCRIPT>
 		let ws;
