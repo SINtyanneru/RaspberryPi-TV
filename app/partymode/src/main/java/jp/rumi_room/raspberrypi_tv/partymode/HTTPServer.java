@@ -213,6 +213,39 @@ public class HTTPServer {
 			}
 		});
 
+		app.post("/api/queue/{id}/move", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				UUID id = parse_id(ctx);
+				if (id == null) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				JsonNode root;
+				try {
+					root = OM.readTree(ctx.body());
+				} catch (JsonProcessingException e) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				JsonNode index_node = root.get("INDEX");
+				if (index_node == null) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				if (Core.move_playitem_to(id, index_node.asInt()) == false) {
+					ctx.status(404);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
 		app.post("/api/queue", new Handler() {
 			@Override
 			public void handle(Context ctx) throws Exception {

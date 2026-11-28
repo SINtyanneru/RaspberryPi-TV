@@ -17,6 +17,18 @@
 			.QUEUE_ITEM.playing {
 				background: rgba(48, 144, 255, 0.25);
 			}
+			.QUEUE_ITEM[draggable="true"] {
+				cursor: grab;
+			}
+			.QUEUE_ITEM.dragging {
+				opacity: 0.4;
+			}
+			.QUEUE_ITEM.drop_before {
+				box-shadow: 0 -3px 0 rgba(48, 144, 255, 1);
+			}
+			.QUEUE_ITEM.drop_after {
+				box-shadow: 0 3px 0 rgba(48, 144, 255, 1);
+			}
 		</STYLE>
 	</HEAD>
 	<BODY>
@@ -40,17 +52,23 @@
 		const seek_bar = document.getElementById("SEEK");
 		let seeking = false;
 		let playing_index = -1;
+		let drag_id = null;
+		let drag_index = -1;
 
 		//SSEで届いたキューの一覧を描画する
 		function render_queue(result) {
 			const queue_list = document.getElementById("QUEUE_LIST");
 			queue_list.replaceChildren();
 
-			for (const item of result.LIST) {
+			for (let i = 0; i < result.LIST.length; i++) {
+				const item = result.LIST[i];
+				const index = i;
 				let item_div = document.createElement("DIV");
 				item_div.className = "QUEUE_ITEM";
+				item_div.draggable = true;
 
 				let image = document.createElement("IMG");
+				image.draggable = false;
 				image.src = `/api/queue/${item.ID}/thumbnail`;
 				image.onerror = function() {
 					image.style.visibility = "hidden";
@@ -94,10 +112,61 @@
 
 				item_div.append(button_div);
 
+				item_div.addEventListener("dragstart", function(event) {
+					drag_id = item.ID;
+					drag_index = index;
+					item_div.classList.add("dragging");
+					event.dataTransfer.effectAllowed = "move";
+				});
+
+				item_div.addEventListener("dragend", function() {
+					drag_id = null;
+					drag_index = -1;
+					item_div.classList.remove("dragging");
+					clear_drop_marks();
+				});
+
+				item_div.addEventListener("dragover", function(event) {
+					event.preventDefault();
+					event.dataTransfer.dropEffect = "move";
+					const rect = item_div.getBoundingClientRect();
+					const after = (event.clientY - rect.top) > rect.height / 2;
+					clear_drop_marks();
+					item_div.classList.add(after ? "drop_after" : "drop_before");
+				});
+
+				item_div.addEventListener("dragleave", function() {
+					item_div.classList.remove("drop_before");
+					item_div.classList.remove("drop_after");
+				});
+
+				item_div.addEventListener("drop", function(event) {
+					event.preventDefault();
+					const rect = item_div.getBoundingClientRect();
+					const after = (event.clientY - rect.top) > rect.height / 2;
+					let target = index + (after ? 1 : 0);
+					if (drag_index >= 0 && drag_index < target) {
+						target--;
+					}
+					if (drag_id != null && target != drag_index) {
+						queue_move(drag_id, target);
+					}
+					clear_drop_marks();
+				});
+
 				queue_list.append(item_div);
 			}
 
 			update_playing_mark();
+		}
+
+		//ドロップ位置の表示を消す
+		function clear_drop_marks() {
+			const queue_list = document.getElementById("QUEUE_LIST");
+			for (let i = 0; i < queue_list.children.length; i++) {
+				queue_list.children[i].classList.remove("drop_before");
+				queue_list.children[i].classList.remove("drop_after");
+			}
 		}
 
 		//再生中の行にplayingクラスを付ける
@@ -163,6 +232,18 @@
 		async function queue_action(id, action) {
 			await fetch("/api/queue/" + id + "/" + action, {
 				method: "POST"
+			});
+		}
+
+		//ドラッグ&ドロップでの移動(結果はSSEのplayqueueで反映される)
+		async function queue_move(id, index) {
+			await fetch("/api/queue/" + id + "/move", {
+				method: "POST",
+				body: JSON.stringify(
+					{
+						"INDEX": index
+					}
+				)
 			});
 		}
 

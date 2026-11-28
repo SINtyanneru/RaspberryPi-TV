@@ -359,6 +359,32 @@ public class Core {
 		return move_playitem(id, 1);
 	}
 
+	//キューのアイテムを指定位置へ移動する(ドラッグ&ドロップ用)
+	public static boolean move_playitem_to(UUID id, int target_index) {
+		int index = -1;
+		for (int i = 0; i < play_queue.size(); i++) {
+			if (play_queue.get(i).get_id().equals(id)) {
+				index = i;
+				break;
+			}
+		}
+		if (index < 0) {
+			return false;
+		}
+		if (target_index < 0) {
+			target_index = 0;
+		}
+		if (target_index >= play_queue.size()) {
+			target_index = play_queue.size() - 1;
+		}
+		if (target_index == index) {
+			return true;
+		}
+		PlayItem item = play_queue.remove(index);
+		play_queue.add(target_index, item);
+		return true;
+	}
+
 	private static boolean move_playitem(UUID id, int delta) {
 		int index = -1;
 		for (int i = 0; i < play_queue.size(); i++) {

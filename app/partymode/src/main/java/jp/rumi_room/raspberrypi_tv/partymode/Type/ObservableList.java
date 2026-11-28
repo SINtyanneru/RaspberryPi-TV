@@ -38,6 +38,18 @@ public class ObservableList<E> {
 		}
 	}
 
+	public void add(int index, E element) {
+		synchronized (list) {
+			list.add(index, element);
+		}
+		for (ChangeListener<E> listener : listener_list) {
+			try {
+				listener.on_add(index, element);
+			} catch (Exception ignored) {
+			}
+		}
+	}
+
 	public E remove(int index) {
 		E removed;
 		synchronized (list) {
