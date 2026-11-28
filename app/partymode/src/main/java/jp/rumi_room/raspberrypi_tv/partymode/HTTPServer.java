@@ -29,6 +29,7 @@ import io.javalin.http.*;
 import io.javalin.http.sse.SseClient;
 import jp.rumi_room.raspberrypi_tv.partymode.Type.ObservableList;
 import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayItem;
+import jp.rumi_room.raspberrypi_tv.partymode.Type.PlayItemType;
 
 public class HTTPServer {
 	private final static ObjectMapper OM = new ObjectMapper();
@@ -47,7 +48,11 @@ public class HTTPServer {
 			queue.put("ADD_AT", pi.get_add_at().atOffset(ZoneOffset.ofHours(9)).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
 			queue.put("ADDER", pi.get_adder().getHostAddress());
 			queue.put("SOURCE", pi.get_type().name());
-			queue.put("CONTENTS_TITLE", pi.get_title());
+			String title = pi.get_title();
+			if (pi.get_type() == PlayItemType.YoutubeVideo) {
+				title = "[Youtube]" + title;
+			}
+			queue.put("CONTENTS_TITLE", title);
 			queue.put("CONTENTS_AUTHOR", pi.get_author());
 			queue_list.add(queue);
 		}
