@@ -154,11 +154,11 @@ public class Main {
 						case 0x4C:	//⏮ 前へ
 							Player.prev();
 							break;
-						case 0x48:	//⏪ 30秒戻し
-							Player.seek(Math.max(0, Player.get_position_ms() - 30000));
+						case 0x48:	//⏪ 巻き戻しスキャン
+							Player.rewind();
 							break;
-						case 0x49:	//⏩ 30秒送り
-							Player.seek(Player.get_position_ms() + 30000);
+						case 0x49:	//⏩ 早送りスキャン
+							Player.fast_forward();
 							break;
 					}
 					break;

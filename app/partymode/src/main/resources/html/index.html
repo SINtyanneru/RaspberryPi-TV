@@ -41,10 +41,10 @@
 		</DIV>
 		<DIV>
 			<BUTTON onclick="control('prev')">前へ</BUTTON>
-			<BUTTON onclick="seek_relative(-30000)">30秒戻し</BUTTON>
+			<BUTTON onclick="control('rewind')">巻き戻し</BUTTON>
 			<BUTTON onclick="control('play')">再生</BUTTON>
 			<BUTTON onclick="control('pause')">一時停止</BUTTON>
-			<BUTTON onclick="seek_relative(30000)">30秒送り</BUTTON>
+			<BUTTON onclick="control('fast_forward')">早送り</BUTTON>
 			<BUTTON onclick="control('next')">次へ</BUTTON>
 			<BUTTON onclick="control('stop')">停止</BUTTON>
 		</DIV>
@@ -237,19 +237,6 @@
 		async function control(name) {
 			await fetch("/api/" + name, {
 				method: "POST"
-			});
-		}
-
-		//相対シーク(巻き戻し・早送り)
-		async function seek_relative(delta_ms) {
-			const target = Math.min(Math.max(Number(seek_bar.value) + delta_ms, 0), Number(seek_bar.max));
-			await fetch("/api/seek", {
-				method: "POST",
-				body: JSON.stringify(
-					{
-						"position_ms": target
-					}
-				)
 			});
 		}
 

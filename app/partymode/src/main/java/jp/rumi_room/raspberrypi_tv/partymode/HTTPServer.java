@@ -348,6 +348,24 @@ public class HTTPServer {
 			}
 		});
 
+		app.post("/api/fast_forward", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				Player.fast_forward();
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
+		app.post("/api/rewind", new Handler() {
+			@Override
+			public void handle(Context ctx) throws Exception {
+				Player.rewind();
+				ctx.status(200);
+				ctx.result("{\"STATUS\": true}");
+			}
+		});
+
 		app.post("/api/subtitle", new Handler() {
 			@Override
 			public void handle(Context ctx) throws Exception {

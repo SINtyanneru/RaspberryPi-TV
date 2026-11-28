@@ -44,6 +44,8 @@ public class Player {
 	//次に再生するアイテムの指定(次へ・前へ・再生中のアイテムが削除された時に使う)
 	private static AtomicReference<UUID> jump_target_id = new AtomicReference<>(null);
 	private static AtomicBoolean paused = new AtomicBoolean(false);
+	//スキャン(早送り・巻き戻し)の倍率。0=通常再生、正=早送り、負=巻き戻し、絶対値が倍率(2/4/8)
+	private static AtomicInteger scan_rate = new AtomicInteger(0);
 	private static AtomicReference<PlayerRequest> player_request = new AtomicReference<>(PlayerRequest.None);
 
 	private final static ObjectMapper OM = new ObjectMapper();
@@ -65,8 +67,14 @@ public class Player {
 		process.destroyForcibly();
 	}
 
-	//指定位置へシークする(再生中のffmpegを落として、次ループで-ss付きで起動し直す)
+	//指定位置へシークする(スキャンは解除される)
 	public static void seek(long position_ms) {
+		scan_rate.set(0);
+		seek_internal(position_ms);
+	}
+
+	//指定位置へシークする(再生中のffmpegを落として、次ループで-ss付きで起動し直す)
+	private static void seek_internal(long position_ms) {
 		if (playing_id.get() == null || playing_process.get() == null) {
 			return;
 		}
@@ -77,8 +85,39 @@ public class Player {
 		kill_playing();
 	}
 
+	//早送りスキャン(押すたびにx2→x4→x8→x2と切り替わる。再生ボタンで通常再生に戻る)
+	public static void fast_forward() {
+		if (playing_id.get() == null) {
+			return;
+		}
+		int rate = scan_rate.get();
+		if (rate == 2) {
+			scan_rate.set(4);
+		} else if (rate == 4) {
+			scan_rate.set(8);
+		} else {
+			scan_rate.set(2);
+		}
+	}
+
+	//巻き戻しスキャン(押すたびにx2→x4→x8→x2と切り替わる。再生ボタンで通常再生に戻る)
+	public static void rewind() {
+		if (playing_id.get() == null) {
+			return;
+		}
+		int rate = scan_rate.get();
+		if (rate == -2) {
+			scan_rate.set(-4);
+		} else if (rate == -4) {
+			scan_rate.set(-8);
+		} else {
+			scan_rate.set(-2);
+		}
+	}
+
 	//一時停止する(ffmpegへSIGSTOPを送る。映像も音声も同じプロセスなので同期は崩れない)
 	public static void pause() {
+		scan_rate.set(0);
 		Process process = playing_process.get();
 		if (process == null || paused.get()) return;
 
@@ -92,6 +131,8 @@ public class Player {
 
 	//再生を再開する(SIGCONT)
 	public static void play() {
+		//スキャン中なら通常再生に戻る
+		scan_rate.set(0);
 		Process process = playing_process.get();
 		if (process == null || paused.get() == false) return;
 
@@ -105,6 +146,7 @@ public class Player {
 
 	//停止する(再生中を落とし、待ちキューも空にする)
 	public static void stop() {
+		scan_rate.set(0);
 		player_request.set(PlayerRequest.Stop);
 		jump_target_id.set(null);
 		play_wait_queue.clear();
@@ -113,6 +155,7 @@ public class Player {
 
 	//次の動画へ進む(再生中のIDからキュー上の次を探し、無ければ何もしない)
 	public static void next() {
+		scan_rate.set(0);
 		UUID id = playing_id.get();
 		if (id == null) return;
 
@@ -125,6 +168,7 @@ public class Player {
 
 	//前の動画へ戻る(再生中のIDからキュー上の前を探し、無ければ先頭から再生し直す)
 	public static void prev() {
+		scan_rate.set(0);
 		UUID id = playing_id.get();
 		if (id == null) return;
 
@@ -139,6 +183,7 @@ public class Player {
 
 	//指定したアイテムへ再生を移す(再生中のアイテムが削除された時など)
 	public static void jump_to(UUID id) {
+		scan_rate.set(0);
 		jump_target_id.set(id);
 		kill_playing();
 	}
@@ -261,6 +306,43 @@ public class Player {
 	}
 
 	public static void main() {
+		//スキャン(早送り・巻き戻し)の駆動スレッド。1秒ごとにシークを繰り返して高速に移動する
+		//間隔の間も通常再生で進むぶんを差し引いて、実効が倍率どおりになるようにする
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				while (true) {
+					try {
+						Thread.sleep(1000);
+					} catch (InterruptedException e) {
+						return;
+					}
+					int rate = scan_rate.get();
+					if (rate == 0 || playing_id.get() == null) {
+						continue;
+					}
+					long position = get_position_ms();
+					long target;
+					if (rate > 0) {
+						target = position + (rate - 1) * 1000L;
+						long duration = play_duration_ms.get();
+						if (duration > 0 && target > duration) {
+							target = duration;
+						}
+					} else {
+						target = position + (rate - 1) * 1000L;
+						if (target <= 0) {
+							//先頭まで戻ったらスキャンを終えて通常再生にする
+							scan_rate.set(0);
+							seek_internal(0);
+							continue;
+						}
+					}
+					seek_internal(target);
+				}
+			}
+		}).start();
+
 		//字幕の表示を再生位置に合わせるスレッド
 		new Thread(new Runnable() {
 			@Override
@@ -305,6 +387,7 @@ public class Player {
 				}});
 
 				//再生状態を公開する(SSEで配信するため)
+				scan_rate.set(0);
 				playing_id.set(pi.get_id());;
 				play_position_ms.set(0);;
 				play_duration_ms.set(probe_duration_ms(pi));;
