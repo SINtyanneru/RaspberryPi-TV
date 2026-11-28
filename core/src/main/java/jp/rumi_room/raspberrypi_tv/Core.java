@@ -75,12 +75,12 @@ public class Core {
 	private static DisplayRect topmenu_cursor;
 
 	//トップメニュー左下の自機URL表示(URLテキストとQRコード)
-	private static DisplayText topmenu_url_text;
-	private static DisplayFramebuffer topmenu_url_qr;
-	private static String topmenu_url = "";
-	private static long topmenu_url_qr_x;
-	private static long topmenu_url_qr_y;
-	private static long topmenu_url_qr_size;
+	private static DisplayText menu_url_text;
+	private static DisplayFramebuffer menu_url_qr;
+	private static String menu_url = "";
+	private static long menu_url_qr_x;
+	private static long menu_url_qr_y;
+	private static long menu_url_qr_size;
 
 	//APP
 	private static boolean runing_app = false;
@@ -99,6 +99,28 @@ public class Core {
 		DisplayRect cursor = new DisplayRect(0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0x00);
 		cursor.set_z(MENU_Z);
 		menu_cursor = Main.display.create_object(cursor);
+
+		//メニューの下部に自機のURLテキストと、その上にQRコードを出す(最初は隠しておき、メニューが開いたら出す)
+		try {
+			long display_height = Main.display.get_height();
+			long text_size = display_height * 30 / 1080;
+			menu_url_qr_size = display_height * 150 / 1080;
+			menu_url = "http://" + get_local_ip() + "/";
+			long text_y = display_height - MENU_INNER_MARGIN - text_size - 20;
+			menu_url_qr_x = MENU_ITEM_X;
+			menu_url_qr_y = text_y - 20 - menu_url_qr_size;
+
+			DisplayText url_text = new DisplayText(MENU_ITEM_X, text_y, text_size, menu_url, 0xFF, 0xFF, 0xFF, 0x00);
+			url_text.set_z(MENU_Z);
+			menu_url_text = Main.display.create_object(url_text);
+
+			DisplayFramebuffer qr = new DisplayFramebuffer(menu_url_qr_x, display_height + menu_url_qr_size, menu_url_qr_size, menu_url_qr_size, 300, 300);
+			qr.set_z(MENU_Z);
+			menu_url_qr = Main.display.create_object(qr);
+			write_qr_frame();
+		} catch (Exception e) {
+			System.err.println("URL表示の初期化に失敗: " + e);
+		}
 
 		//メニューの既定アイテム
 		add_menu_item(new MenuItem("閉じる", new Runnable() {
@@ -188,24 +210,6 @@ public class Core {
 	private static void show_topmenu() {
 		topmenu_now = true;
 		topmenu_dirty = true;
-
-		//URL表示を戻す(IPが変わっていたらテキストとQRを作り直す)
-		if (topmenu_url_text != null && topmenu_url_qr != null) {
-			try {
-				String url = "http://" + get_local_ip() + "/";
-				if (url.equals(topmenu_url) == false) {
-					topmenu_url = url;
-					topmenu_url_text.set_text(url);
-					write_qr_frame();
-				}
-				topmenu_url_text.set_color(0x00, 0x00, 0x00, 0xFF);
-				topmenu_url_text.update();
-				topmenu_url_qr.set_geometry(topmenu_url_qr_x, topmenu_url_qr_y, topmenu_url_qr_size, topmenu_url_qr_size);
-				topmenu_url_qr.update();
-			} catch (Exception e) {
-				System.err.println("URL表示の復帰に失敗: " + e);
-			}
-		}
 	}
 
 	private static void hide_topmenu() throws IOException {
@@ -223,16 +227,6 @@ public class Core {
 		}
 		topmenu_cursor.set_color(0x00, 0x00, 0x00, 0x00);
 		topmenu_cursor.update();
-
-		if (topmenu_url_text != null) {
-			topmenu_url_text.set_color(0x00, 0x00, 0x00, 0x00);
-			topmenu_url_text.update();
-		}
-		if (topmenu_url_qr != null) {
-			//フレームバッファーは画面外へ逃がして隠す
-			topmenu_url_qr.set_geometry(topmenu_url_qr_x, Main.display.get_height() + topmenu_url_qr_size, topmenu_url_qr_size, topmenu_url_qr_size);
-			topmenu_url_qr.update();
-		}
 	}
 
 	private static void init_topmenu_objects() throws IOException {
@@ -257,28 +251,6 @@ public class Core {
 			topmenu_item_text_list.add(items);
 		}
 
-		//左下に自機のURLテキストと、その上にQRコードを出す
-		try {
-			long display_height = Main.display.get_height();
-			long margin = display_height * 40 / 1080;
-			long text_size = display_height * 30 / 1080;
-			topmenu_url_qr_size = display_height * 150 / 1080;
-			topmenu_url = "http://" + get_local_ip() + "/";
-			long text_y = display_height - margin - text_size;
-			topmenu_url_qr_x = margin;
-			topmenu_url_qr_y = text_y - margin / 2 - topmenu_url_qr_size;
-
-			DisplayText url_text = new DisplayText(margin, text_y, text_size, topmenu_url, 0x00, 0x00, 0x00, 0xFF);
-			url_text.set_z(TOPMENU_Z);
-			topmenu_url_text = Main.display.create_object(url_text);
-
-			DisplayFramebuffer qr = new DisplayFramebuffer(topmenu_url_qr_x, topmenu_url_qr_y, topmenu_url_qr_size, topmenu_url_qr_size, 300, 300);
-			qr.set_z(TOPMENU_Z);
-			topmenu_url_qr = Main.display.create_object(qr);
-			write_qr_frame();
-		} catch (Exception e) {
-			System.err.println("URL表示の初期化に失敗: " + e);
-		}
 	}
 
 	//自機のローカルIP(サイトローカルのIPv4、有線・無線の実インターフェースを優先)
@@ -315,11 +287,11 @@ public class Core {
 
 	//QRコードのフレームをフレームバッファーへ流し込む
 	private static void write_qr_frame() throws Exception {
-		byte[] frame = QrCode.build_frame(topmenu_url, 300);
+		byte[] frame = QrCode.build_frame(menu_url, 300);
 		SocketChannel channel = null;
 		for (int i = 0; i < 50 && channel == null; i++) {
 			try {
-				channel = SocketChannel.open(UnixDomainSocketAddress.of(topmenu_url_qr.get_socket_path()));
+				channel = SocketChannel.open(UnixDomainSocketAddress.of(menu_url_qr.get_socket_path()));
 			} catch (IOException e) {
 				Thread.sleep(100);
 			}
@@ -537,6 +509,24 @@ public class Core {
 			menu_cursor.set_color(0xFF, 0xFF, 0xFF, 0x00);
 		}
 		menu_cursor.update();
+
+		//URLとQRコードも出す(IPが変わっていたらテキストとQRを作り直す)
+		if (menu_url_text != null && menu_url_qr != null) {
+			try {
+				String url = "http://" + get_local_ip() + "/";
+				if (url.equals(menu_url) == false) {
+					menu_url = url;
+					menu_url_text.set_text(url);
+					write_qr_frame();
+				}
+				menu_url_text.set_color(0xFF, 0xFF, 0xFF, 0xFF);
+				menu_url_text.update();
+				menu_url_qr.set_geometry(menu_url_qr_x, menu_url_qr_y, menu_url_qr_size, menu_url_qr_size);
+				menu_url_qr.update();
+			} catch (Exception e) {
+				System.err.println("URL表示の復帰に失敗: " + e);
+			}
+		}
 	}
 
 	//メニューアイテムを隠す
@@ -547,6 +537,16 @@ public class Core {
 		}
 		menu_cursor.set_color(0xFF, 0xFF, 0xFF, 0x00);
 		menu_cursor.update();
+
+		if (menu_url_text != null) {
+			menu_url_text.set_color(0xFF, 0xFF, 0xFF, 0x00);
+			menu_url_text.update();
+		}
+		if (menu_url_qr != null) {
+			//フレームバッファーは画面外へ逃がして隠す
+			menu_url_qr.set_geometry(menu_url_qr_x, Main.display.get_height() + menu_url_qr_size, menu_url_qr_size, menu_url_qr_size);
+			menu_url_qr.update();
+		}
 	}
 
 	//アプリを終了する。EXITを送り、アプリの終了がend_appに届いたらトップメニューへ戻る(コアは終了しない)
