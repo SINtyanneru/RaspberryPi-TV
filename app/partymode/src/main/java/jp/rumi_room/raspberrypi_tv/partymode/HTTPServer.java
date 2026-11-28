@@ -123,10 +123,20 @@ public class HTTPServer {
 			@Override
 			public void handle(Context ctx) throws Exception {
 				String id = ctx.pathParam("id");
-				Optional<PlayItem> pi = Core.get_playitem_from_id(UUID.fromString(id));
-				if (pi.isEmpty()) {
+				UUID uuid;
+				try {
+					uuid = UUID.fromString(id);
+				} catch (IllegalArgumentException ex) {
+					ctx.status(400);
+					ctx.result("{\"STATUS\": false}");
+					return;
+				}
+
+				Optional<PlayItem> pi = Core.get_playitem_from_id(uuid);
+				if (pi.isEmpty() || pi.get().get_thumbnail() == null) {
 					ctx.status(404);
 					ctx.result("{\"STATUS\": false}");
+					return;
 				}
 
 				BufferedImage image = pi.get().get_thumbnail();
