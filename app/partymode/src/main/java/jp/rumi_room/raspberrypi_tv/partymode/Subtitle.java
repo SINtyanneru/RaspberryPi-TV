@@ -35,7 +35,7 @@ public class Subtitle {
 	private static List<Cue> cue_list = new ArrayList<>();
 	private static Cue shown_cue = null;
 
-	//字幕の表示位置(キューが変わるたびに下部の中でランダムに決める)
+	//字幕の表示位置(キューが変わるたびに中央付近の狭い範囲でランダムに決める)
 	private static Random random = new Random();
 	private static boolean position_dirty = false;
 	private static int box_x = 0;
@@ -126,18 +126,22 @@ public class Subtitle {
 			int box_width = max_width + pad_x * 2;
 			int box_height = metrics.getAscent() + metrics.getDescent() + line_height * (line_list.length - 1) + pad_y * 2;
 
-			//表示位置はキューごとに下部の中でランダムに決める(地デジの字幕が位置指定で動くのの真似)
+			//表示位置はキューごとに中央付近の狭い範囲でランダムに決める
 			if (position_dirty) {
 				position_dirty = false;
-				int margin_x = font_size;
-				int span_x = Main.screen_width - box_width - margin_x * 2;
-				if (span_x > 0) {
-					box_x = margin_x + random.nextInt(span_x);
-				} else {
-					box_x = (Main.screen_width - box_width) / 2;
+				//横: 中央から画面幅の1/8までずれる
+				int center_x = (Main.screen_width - box_width) / 2;
+				int range_x = Main.screen_width / 8;
+				box_x = center_x + random.nextInt(range_x * 2 + 1) - range_x;
+				if (box_x < 0) {
+					box_x = 0;
 				}
+				if (box_x + box_width > Main.screen_width) {
+					box_x = Main.screen_width - box_width;
+				}
+				//縦: 既定位置から画面高の1/10まで浮く
 				int default_bottom = Main.screen_height - margin_bottom + metrics.getDescent() + pad_y;
-				box_bottom = default_bottom - random.nextInt(Main.screen_height / 4 + 1);
+				box_bottom = default_bottom - random.nextInt(Main.screen_height / 10 + 1);
 			}
 
 			//字幕の後ろに半透明の四角形を出して見やすくする
